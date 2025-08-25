@@ -579,7 +579,6 @@ const DealerSearchView: React.FC<{
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [dealers, q, fRep, fState, fRegion, fType, fStatus, users]);
 
-  const regionListForState = (state: string) => (regions[state] || []).slice().sort();
 
   const goToDealer = (dealerId: string) => {
     saveLS(LS_LAST_SELECTED_DEALER, dealerId);
@@ -659,7 +658,6 @@ const DealerSearchView: React.FC<{
       .sort((a, b) => (a.tsISO > b.tsISO ? -1 : 1));
   }, [notes, isRep, session]);
 
-  const snippet = (s: string, len = 48) => (s.length > len ? s.slice(0, len) + "…" : s);
   const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
   const dealerById = (id: string) => dealers.find((d) => d.id === id);
 
@@ -1089,12 +1087,11 @@ const DealerNotesView: React.FC<{
   setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
   notes: Note[];
   setNotes: React.Dispatch<React.SetStateAction<Note[]>>;
-  tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   regions: RegionsCatalog;
   setRoute: (r: RouteKey) => void;
   showToast: (m: string, k?: ToastKind) => void;
-}> = ({ session, users, dealers, setDealers, notes, setNotes, tasks, setTasks, regions, setRoute, showToast }) => {
+}> = ({ session, users, dealers, setDealers, notes, setNotes, setTasks, regions, setRoute, showToast }) => {
   const dealerId = loadLS<string | null>(LS_LAST_SELECTED_DEALER, null);
   const dealer = dealers.find((d) => d.id === dealerId) || null;
   const me = users.find((u) => u.username === session?.username) || null;
@@ -1251,7 +1248,6 @@ const DealerNotesView: React.FC<{
   };
 
   /* --------------------------------- UI --------------------------------- */
-  const repList = users.filter((u) => u.role === "Rep");
 
   return (
     <div className="space-y-4">
@@ -1696,11 +1692,13 @@ const ReportingView: React.FC<{
     const recent = scopedNotes.filter((n) => n.category === "Visit" && new Date(n.tsISO) >= cutoff);
     const byUser: Record<string, number> = {};
     for (const n of recent) byUser[n.authorUsername] = (byUser[n.authorUsername] || 0) + 1;
-    const rows =
-      repFilter === "ALL"
-        ? Object.entries(byUser).sort((a, b) => b[1] - a[1])
-        : [[selectedRep!.username, byUser[selectedRep!.username] || 0]];
-    const max = Math.max(1, ...rows.map(([, v]) => v));
+    const rows: [string, number][] =
+  repFilter === "ALL"
+    ? (Object.entries(byUser) as [string, number][])
+        .sort((a, b) => b[1] - a[1])
+    : [[selectedRep!.username, byUser[selectedRep!.username] || 0]];
+
+const max = Math.max(1, ...rows.map(([, v]) => Number(v)));
     return { rows, max, total: recent.length };
   }, [scopedNotes, repFilter, selectedRep]);
 
@@ -1812,10 +1810,10 @@ const ReportingView: React.FC<{
 
         <Card title="Visits in Last 30 Days">
           <div className="space-y-3">
-            {visitsLast30.rows.map(([user, count]) => (
+          {visitsLast30.rows.map(([user, count]: [string, number]) => (
               <div key={user} className="flex items-center gap-3">
                 <div className="w-40 text-sm">{user}</div>
-                <div className="flex-1">{bar(count, visitsLast30.max)}</div>
+                <div className="flex-1">{bar(Number(count), Number(visitsLast30.max))}</div>
                 <div className="w-10 text-right text-sm">{count}</div>
               </div>
             ))}
@@ -2058,7 +2056,6 @@ const App: React.FC = () => {
                 setDealers={setDealers}
                 notes={notes}
                 setNotes={setNotes}
-                tasks={tasks}
                 setTasks={setTasks}
                 regions={regions}
                 setRoute={setRoute}
@@ -2107,13 +2104,6 @@ const KPI: React.FC<{ title: string; value: number | string }> = ({ title, value
   <div className="rounded-xl border bg-white p-5 shadow-sm">
     <div className="text-slate-500 text-sm">{title}</div>
     <div className="text-2xl font-semibold text-slate-800 mt-1">{value}</div>
-  </div>
-);
-
-const PlaceholderCard: React.FC<{ title: string; description?: string }> = ({ title, description }) => (
-  <div className="rounded-xl border bg-white p-6 shadow-sm">
-    <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-    {description && <p className="mt-2 text-slate-600 text-sm">{description}</p>}
   </div>
 );
 
