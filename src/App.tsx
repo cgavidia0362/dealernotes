@@ -4,7 +4,29 @@
     invite/password storage scaffolding, and login enhancements.)
 =========================================================================== */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+// ---- Polyfill & types for String.replaceAll (to support older TS libs) ----
+declare global {
+  interface String {
+    replaceAll(search: string | RegExp, replacement: string): string;
+  }
+}
+// Runtime shim (safe for modern browsers; no-op if exists)
+if (!(String.prototype as any).replaceAll) {
+  (String.prototype as any).replaceAll = function (search: any, replacement: any) {
+    const target = String(this);
+    if (search instanceof RegExp) {
+      if (!search.global) search = new RegExp(search.source, search.flags + "g");
+      return target.replace(search, replacement);
+    }
+    const s = String(search);
+    const r = String(replacement);
+    return target.split(s).join(r);
+  };
+}
+
 
 /**
  * Final Stage 5B — Reporting upgrades (per-rep drilldown, month-to-month) + prior fixes
@@ -214,7 +236,7 @@ function seedIfNeeded() {
 seedIfNeeded();
 
 /* --------------------------------- Toasts --------------------------------- */
-type ToastKind = "success" | "error";
+type ToastKind = "success" | "error" | "info";
 type Toast = { id: string; kind: ToastKind; message: string };
 
 const useToasts = () => {
@@ -1501,7 +1523,7 @@ const saveName = () => {
     }
   };
 
-  const setReason = (key: keyof Nonnullable<Dealer["noDealReasons"]>, v: boolean | string) => {
+  const setReason = (key: keyof NonNullable <Dealer["noDealReasons"]>, v: boolean | string) => {
     if (!repCanAccess) return;
     const current = dealer.noDealReasons || {};
     updateDealer({ noDealReasons: { ...current, [key]: v as any } });
@@ -2186,11 +2208,11 @@ const ReportingView: React.FC<{
     const recent = scopedNotes.filter((n) => n.category === "Visit" && new Date(n.tsISO) >= cutoff);
     const byUser: Record<string, number> = {};
     for (const n of recent) byUser[n.authorUsername] = (byUser[n.authorUsername] || 0) + 1;
-    const rows =
-      repFilter === "ALL"
-        ? Object.entries(byUser).sort((a, b) => b[1] - a[1])
-        : [[selectedRep!.username, byUser[selectedRep!.username] || 0]];
-    const max = Math.max(1, ...rows.map(([, v]) => v));
+    const rows: [string, number][] =
+    repFilter === "ALL"
+      ? Object.entries(byUser)
+      : [[selectedRep!.username, (byUser[selectedRep!.username] || 0)] as [string, number]];
+  const max = Math.max(1, ...rows.map(([, v]) => v));  
     return { rows, max, total: recent.length };
   }, [scopedNotes, repFilter, selectedRep]);
 
@@ -3345,7 +3367,15 @@ const UserManagementView: React.FC<{
       });
     downloadCSV("all_notes.csv", rows);
   };
-
+// ---------- Import Dealers (stub so build passes) ----------
+const handleImportDealers = async (file?: File | null) => {
+  if (!file) {
+    showToast("No file selected.", "error");
+    return;
+  }
+  // Minimal stub for now; wire up real CSV parsing later.
+  showToast("Import not implemented yet in this build.", "error");
+};
   return (
     <div className="space-y-4">
       {/* Users */}
