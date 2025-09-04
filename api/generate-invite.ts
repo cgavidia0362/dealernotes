@@ -16,7 +16,7 @@ export default async function handler(req: any, res: any) {
     if (!email) return res.status(400).json({ error: 'Missing email' });
 
     const site = (process.env.SITE_URL || '').replace(/\/$/, '');
-    const redirectTo = site ? `${site}/#/auth/callback?next=/reset` : undefined;
+    const redirectTo = site ? `${site}/auth/callback?next=/reset` : undefined;   // ← add ?next=/reset    
 
     const { data, error } = await supabase.auth.admin.generateLink({
       type: 'invite',

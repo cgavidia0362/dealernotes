@@ -3,7 +3,7 @@
    (With requested changes: Daily Summary 7-day + Admin/Manager scope,
     invite/password storage scaffolding, and login enhancements.)
 =========================================================================== */
-
+import supabase from './supabaseClient';
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -3122,6 +3122,22 @@ const UserManagementView: React.FC<{
   const inviteUrl = inviteToken
   ? (inviteToken.startsWith('http') ? inviteToken : `${location.origin}/reset?token=${inviteToken}`)
   : "";
+// -------- Force-Reset (opens after auth/callback?next=/reset) --------
+const [showForceReset, setShowForceReset] = useState(false);
+const [newPass, setNewPass] = useState('');
+const [newPass2, setNewPass2] = useState('');
+
+useEffect(() => {
+  const u = new URL(window.location.href);
+  const next = u.searchParams.get('next');
+  if (next === '/reset') {
+    setShowForceReset(true);
+    // optional: clear the query param so refresh doesn't reopen the modal
+    const clean = new URL(window.location.href);
+    clean.searchParams.delete('next');
+    window.history.replaceState({}, '', clean.toString());
+  }
+}, []);
 
   const openAddUser = () => {
     setEditingId(null);
@@ -3206,30 +3222,35 @@ const UserManagementView: React.FC<{
     showToast("User removed.", "success");
   };
 
-  // Only in EDIT: Generate + Copy invite link via serverless API
-  const generateInvite = async () => {
-    try {
-      // get email from the new Email field; fall back to username only if it looks like an email
-      const emailFromForm = (draft?.email || '').trim();
-      const fallback = (draft?.username || '').trim();
-      const email = emailFromForm || (fallback.includes('@') ? fallback : '');
-  
-      if (!email || !email.includes('@')) {
-        showToast('Please enter a valid Email for this user.', 'error');
-        return;
-      }
-  
-      // 3) Call the API route (unchanged) — keep this inside the try
-      const r = await fetch('/api/generate-invite', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+// Only in EDIT: Generate + Copy invite link via serverless API
+const generateInvite = async () => {
+  try {
+    // get email from the new Email field; fall back to username only if it looks like an email
+    const emailFromForm = (draft?.email || '').trim();
+    const fallback = (draft?.username || '').trim();
+    const email = emailFromForm || (fallback.includes('@') ? fallback : '');
+
+    if (!email || !email.includes('@')) {
+      showToast('Please enter a valid Email for this user.', 'error');
+      return;
+    }
+
+    // Call the API route
+    const r = await fetch('/api/generate-invite', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
 
     const json = await r.json().catch(() => ({} as any));
     if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
 
-    const link = (json as any)?.link as string | undefined;
+    // Support multiple Supabase response shapes just in case
+    const link: string | undefined =
+      (json as any)?.link ??
+      (json as any)?.properties?.action_link ??
+      (json as any)?.action_link;
+
     if (link) {
       // store full link; the inviteUrl getter above will use it directly
       setInviteToken(link);
@@ -3248,16 +3269,39 @@ const UserManagementView: React.FC<{
   }
 };
 
-  const copyInvite = async () => {
-    if (!inviteUrl) return;
-    try {
-      await navigator.clipboard.writeText(inviteUrl);
-      showToast("Invite link copied.", "success");
-    } catch {
-      showToast("Unable to copy; select and copy manually.", "error");
+// NEW: reset-password handler (must be OUTSIDE generateInvite)
+const handleSaveNewPassword = async () => {
+  try {
+    if (!newPass || newPass.length < 8) {
+      showToast('Password must be at least 8 characters.', 'error');
+      return;
     }
-  };
+    if (newPass !== newPass2) {
+      showToast('Passwords do not match.', 'error');
+      return;
+    }
 
+    const { error } = await supabase.auth.updateUser({ password: newPass });
+    if (error) throw error;
+
+    showToast('Password set. You are logged in.', 'success');
+    setShowForceReset(false);
+    setNewPass('');
+    setNewPass2('');
+  } catch (e: any) {
+    showToast(e?.message || 'Failed to set password', 'error');
+  }
+};
+
+const copyInvite = async () => {
+  if (!inviteUrl) return;
+  try {
+    await navigator.clipboard.writeText(inviteUrl);
+    showToast('Invite link copied.', 'success');
+  } catch {
+    showToast('Unable to copy; select and copy manually.', 'error');
+  }
+};
   // Activate/Deactivate: move password in/out of active store to block/allow login
   const setStatusForUser = (u: User, status: "Active" | "Inactive") => {
     const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
@@ -3726,6 +3770,38 @@ const handleImportDealers = async (file?: File | null) => {
           </div>
         </Modal>
       )}
+
+{showForceReset && (
+  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
+    <div className="grid gap-3">
+      <p className="text-sm text-slate-500">
+        Welcome! Please create your password to finish setting up your account.
+      </p>
+
+      <TextField
+        label="New Password"
+        type="password"
+        value={newPass}
+        onChange={(v) => setNewPass(v)}
+      />
+      <TextField
+        label="Confirm Password"
+        type="password"
+        value={newPass2}
+        onChange={(v) => setNewPass2(v)}
+      />
+
+      <div className="flex gap-2 justify-end">
+        <button className="px-3 py-2 rounded-lg border" onClick={() => setShowForceReset(false)}>
+          Cancel
+        </button>
+        <button className="px-3 py-2 rounded-lg bg-blue-600 text-white" onClick={handleSaveNewPassword}>
+          Save Password
+        </button>
+      </div>
+    </div>
+  </Modal>
+)}
 
       {/* NEW: Confirm Remove User */}
       {confirmRemove && (
