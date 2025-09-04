@@ -3207,22 +3207,24 @@ const UserManagementView: React.FC<{
   };
 
   // Only in EDIT: Generate + Copy invite link via serverless API
-const generateInvite = async () => {
-  try {
-    const email = (draft?.username || '').trim();
-
-// 2) Validate
-if (!email || !email.includes('@')) {
-  showToast('Please put a valid email in the Username field first.', 'error');
-  return;
-}
-
-// 3) Call the API route (unchanged)
-const r = await fetch('/api/generate-invite', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ email }),
-});
+  const generateInvite = async () => {
+    try {
+      // get email from the new Email field; fall back to username only if it looks like an email
+      const emailFromForm = (draft?.email || '').trim();
+      const fallback = (draft?.username || '').trim();
+      const email = emailFromForm || (fallback.includes('@') ? fallback : '');
+  
+      if (!email || !email.includes('@')) {
+        showToast('Please enter a valid Email for this user.', 'error');
+        return;
+      }
+  
+      // 3) Call the API route (unchanged) — keep this inside the try
+      const r = await fetch('/api/generate-invite', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
 
     const json = await r.json().catch(() => ({} as any));
     if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
@@ -3655,6 +3657,11 @@ const handleImportDealers = async (file?: File | null) => {
           <div className="grid md:grid-cols-2 gap-3">
             <TextField label="Full Name" value={draft.name} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
             <TextField label="Username" value={draft.username} onChange={(v) => setDraft((d) => ({ ...d, username: v }))} />
+            <TextField
+  label="Email"
+  value={draft.email || ''}
+  onChange={(v) => setDraft((d) => ({ ...d, email: v }))}
+/>
             <SelectField
               label="Role"
               value={draft.role}
