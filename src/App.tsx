@@ -3118,7 +3118,9 @@ const UserManagementView: React.FC<{
   const [importDealersOpen, setImportDealersOpen] = useState(false);
   // Invite state (only for Edit)
   const [inviteToken, setInviteToken] = useState<string>("");
-  const inviteUrl = inviteToken ? `${location.origin}/reset?token=${inviteToken}` : "";
+  const inviteUrl = inviteToken
+  ? (inviteToken.startsWith('http') ? inviteToken : `${location.origin}/reset?token=${inviteToken}`)
+  : "";
 
   const openAddUser = () => {
     setEditingId(null);
@@ -3199,16 +3201,39 @@ const UserManagementView: React.FC<{
     showToast("User removed.", "success");
   };
 
-  // Only in EDIT: Generate + Copy invite link (and persist token -> userId)
-  const generateInvite = () => {
-    if (!editingId) return;
-    const token = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
-    const inv = loadLS<InviteMap>(LS_INVITES, {});
-    inv[token] = { userId: editingId, createdAtISO: new Date().toISOString() };
-    saveLS(LS_INVITES, inv);
-    setInviteToken(token);
-    showToast("Invite link generated. Use Copy to share.", "success");
-  };
+  // Only in EDIT: Generate + Copy invite link via serverless API
+const generateInvite = async () => {
+  try {
+    const email = (window.prompt('Email to invite?') || '').trim();
+    if (!email) { showToast('Please enter an email.', 'error'); return; }
+
+    const r = await fetch('/api/generate-invite', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+
+    const json = await r.json().catch(() => ({} as any));
+    if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
+
+    const link = (json as any)?.link as string | undefined;
+    if (link) {
+      // store full link; the inviteUrl getter above will use it directly
+      setInviteToken(link);
+
+      try {
+        await navigator.clipboard.writeText(link);
+        showToast('Invite link copied to clipboard.', 'success');
+      } catch {
+        showToast('Invite created (copy failed). Link shown below.', 'success');
+      }
+    } else {
+      showToast('Invite created but link missing.', 'error');
+    }
+  } catch (e: any) {
+    showToast(e?.message || 'Invite failed', 'error');
+  }
+};
 
   const copyInvite = async () => {
     if (!inviteUrl) return;
