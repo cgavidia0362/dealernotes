@@ -3204,14 +3204,20 @@ const UserManagementView: React.FC<{
   // Only in EDIT: Generate + Copy invite link via serverless API
 const generateInvite = async () => {
   try {
-    const email = (window.prompt('Email to invite?') || '').trim();
-    if (!email) { showToast('Please enter an email.', 'error'); return; }
+    const email = (draft?.username || '').trim();
 
-    const r = await fetch('/api/generate-invite', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
+// 2) Validate
+if (!email || !email.includes('@')) {
+  showToast('Please put a valid email in the Username field first.', 'error');
+  return;
+}
+
+// 3) Call the API route (unchanged)
+const r = await fetch('/api/generate-invite', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ email }),
+});
 
     const json = await r.json().catch(() => ({} as any));
     if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
