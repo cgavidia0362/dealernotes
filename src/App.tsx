@@ -54,6 +54,7 @@ type User = {
   id: string;
   name: string;
   username: string;
+  email?: string;
   role: Role;
   states: string[];
   regionsByState: Record<string, string[]>;
@@ -3113,7 +3114,7 @@ const UserManagementView: React.FC<{
   // ---------- Users table + modal ----------
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const emptyUser: User = { id: "", name: "", username: "", role: "Rep", states: [], regionsByState: {}, phone: "" };
+  const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
   const [importDealersOpen, setImportDealersOpen] = useState(false);
   // Invite state (only for Edit)
@@ -3131,7 +3132,11 @@ const UserManagementView: React.FC<{
 
   const openEditUser = (u: User) => {
     setEditingId(u.id);
-    setDraft(JSON.parse(JSON.stringify(u)));
+    setDraft({
+      ...JSON.parse(JSON.stringify(u)),
+      // if the user already has email use it; else if username looks like email, use that
+      email: (u as any).email ?? (u.username?.includes('@') ? u.username : ''),
+    });  
     setInviteToken("");
     setUserModalOpen(true);
   };
