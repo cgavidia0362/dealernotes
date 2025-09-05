@@ -3,7 +3,7 @@
    (With requested changes: Daily Summary 7-day + Admin/Manager scope,
     invite/password storage scaffolding, and login enhancements.)
 =========================================================================== */
-import supabase from './supabaseClient';
+import { supabase } from './supabaseClient';
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -3138,7 +3138,21 @@ useEffect(() => {
     window.history.replaceState({}, '', clean.toString());
   }
 }, []);
+// Detect Supabase redirect flags in the URL hash (invite/recovery) and open the reset modal.
+useEffect(() => {
+  const rawHash = window.location.hash || '';
+  const params = new URLSearchParams(rawHash.startsWith('#') ? rawHash.slice(1) : rawHash);
+  const type = (params.get('type') || '').toLowerCase(); // invite | recovery | etc.
 
+  if (type === 'invite' || type === 'recovery') {
+    setShowForceReset(true);
+
+    // Optional: clean the hash so a refresh doesn't reopen the modal
+    const url = new URL(window.location.href);
+    url.hash = '';
+    window.history.replaceState({}, '', url.toString());
+  }
+}, []);
   const openAddUser = () => {
     setEditingId(null);
     setDraft({ ...emptyUser, id: uid() });

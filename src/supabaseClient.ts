@@ -1,10 +1,14 @@
-// src/supabaseClient.ts
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL!;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY!;
+const url = import.meta.env.VITE_SUPABASE_URL;
+const anon = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-// (Optional) also export default so either import style works
-export default supabase;
+if (!url || !anon) {
+  // Fail fast but with a clear message instead of a blank screen
+  console.error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+  throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+}
 
+export const supabase = createClient(url, anon, {
+  auth: { autoRefreshToken: true, persistSession: true },
+});
