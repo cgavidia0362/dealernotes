@@ -3802,6 +3802,7 @@ const handleImportDealers = async (file?: File | null) => {
         value={newPass}
         onChange={(v) => setNewPass(v)}
       />
+
       <TextField
         label="Confirm Password"
         type="password"
@@ -3810,10 +3811,16 @@ const handleImportDealers = async (file?: File | null) => {
       />
 
       <div className="flex gap-2 justify-end">
-        <button className="px-3 py-2 rounded-lg border" onClick={() => setShowForceReset(false)}>
+        <button
+          className="px-3 py-2 rounded-lg border"
+          onClick={() => setShowForceReset(false)}
+        >
           Cancel
         </button>
-        <button className="px-3 py-2 rounded-lg bg-blue-600 text-white" onClick={handleSaveNewPassword}>
+        <button
+          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
+          onClick={handleSaveNewPassword}
+        >
           Save Password
         </button>
       </div>
