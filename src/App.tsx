@@ -3127,32 +3127,36 @@ const [showForceReset, setShowForceReset] = useState(false);
 const [newPass, setNewPass] = useState('');
 const [newPass2, setNewPass2] = useState('');
 
+// 1) Open reset modal if Supabase put "type=recovery|invite|signup" in the hash
 useEffect(() => {
-  const u = new URL(window.location.href);
-  const next = u.searchParams.get('next');
-  if (next === '/reset') {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const type = params.get('type');
+
+  if (type === 'recovery' || type === 'invite' || type === 'signup') {
     setShowForceReset(true);
-    // optional: clear the query param so refresh doesn't reopen the modal
+
+    // Optional: clean the hash so refresh doesn't re-open it
     const clean = new URL(window.location.href);
-    clean.searchParams.delete('next');
+    clean.hash = '';
     window.history.replaceState({}, '', clean.toString());
   }
 }, []);
-// Detect Supabase redirect flags in the URL hash (invite/recovery) and open the reset modal.
+
+// 2) Also listen to Supabase auth events in case the library clears the hash too fast
 useEffect(() => {
-  const rawHash = window.location.hash || '';
-  const params = new URLSearchParams(rawHash.startsWith('#') ? rawHash.slice(1) : rawHash);
-  const type = (params.get('type') || '').toLowerCase(); // invite | recovery | etc.
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      setShowForceReset(true);
+    } else if (event === 'SIGNED_IN') {
+      // Fallback: if we landed with a recovery hash and it just got processed
+      const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      if (params.get('type') === 'recovery') setShowForceReset(true);
+    }
+  });
 
-  if (type === 'invite' || type === 'recovery') {
-    setShowForceReset(true);
-
-    // Optional: clean the hash so a refresh doesn't reopen the modal
-    const url = new URL(window.location.href);
-    url.hash = '';
-    window.history.replaceState({}, '', url.toString());
-  }
+  return () => subscription.unsubscribe();
 }, []);
+
   const openAddUser = () => {
     setEditingId(null);
     setDraft({ ...emptyUser, id: uid() });
