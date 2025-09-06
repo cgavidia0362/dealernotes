@@ -2682,6 +2682,10 @@ const openResetOnce = () => {
   openedResetRef.current = true;
   setShowForceReset(true);
 };
+// who is resetting (derived from Supabase -> match to our app user)
+const [resetUser, setResetUser] = useState<User | null>(null);
+const [resetUsername, setResetUsername] = useState('');
+const [resetEmail, setResetEmail] = useState('');
 
 // Read auth params from BOTH the hash (#...) and the query (?...)
 const parseAuthParams = () => {
@@ -2748,6 +2752,52 @@ useEffect(() => {
   window.addEventListener('hashchange', onHash, { passive: true });
   return () => window.removeEventListener('hashchange', onHash);
 }, []);
+// When the reset modal opens, read Supabase user -> map to our app user
+useEffect(() => {
+  if (!showForceReset) return;
+
+  (async () => {
+    try {
+      // 1) Read the authed user from the invite/recovery token
+      const { data } = await supabase.auth.getUser();
+      const email = (data?.user?.email || '').toLowerCase();
+      setResetEmail(email);
+
+      // 2) Try to find the matching app user from the in-memory list
+      //    (email match first, then fallback to username==email)
+      let u =
+        (Array.isArray(users) &&
+          users.find(
+            (x: any) =>
+              (x?.email || '').toLowerCase() === email ||
+              (x?.username || '').toLowerCase() === email
+          )) ||
+        null;
+
+      // 3) Optional DB fallback (only if you actually have a 'users' table)
+      if (!u && email) {
+        try {
+          const r = await supabase
+            .from('users') // <-- change if your table is named differently
+            .select('id, username, email')
+            .eq('email', email)
+            .single();
+          if (!r.error && r.data) u = r.data as any;
+        } catch {
+          /* ignore — modal still works without this */
+        }
+      }
+
+      setResetUser(u);
+      setResetUsername(u?.username || '');
+    } catch {
+      // Non-fatal: modal still works without the name
+      setResetUser(null);
+      setResetUsername('');
+    }
+  })();
+}, [showForceReset, users]);
+
 // --- end top-level detection ---
 
   const can = useMemo(() => {
@@ -2856,9 +2906,10 @@ useEffect(() => {
       );
     }
   }
-// Save Password for Supabase invite/recovery
+// Save Password for Supabase invite/recovery + activate local user + log them in
 const handleSaveNewPassword = async () => {
   try {
+    // 1) Basic validation
     if (!newPass || newPass.length < 8) {
       showToast('Password must be at least 8 characters.', 'error');
       return;
@@ -2868,16 +2919,67 @@ const handleSaveNewPassword = async () => {
       return;
     }
 
+    // 2) Update password in Supabase (token already signed-in from invite/recovery)
     const { error } = await supabase.auth.updateUser({ password: newPass });
     if (error) throw error;
 
-    showToast('Password set. You are logged in.', 'success');
+    // 3) Identify which app user this is (via Supabase email)
+    //    We already set resetEmail/resetUsername in Step 1B, but re-read to be safe.
+    let email = (resetEmail || '').toLowerCase();
+    if (!email) {
+      const { data } = await supabase.auth.getUser();
+      email = (data?.user?.email || '').toLowerCase();
+    }
+
+    // 4) Find the user in your in-memory list
+    const u =
+      (Array.isArray(users) &&
+        users.find(
+          (x: any) =>
+            (x?.email || '').toLowerCase() === email ||
+            (x?.username || '').toLowerCase() === email
+        )) ||
+      null;
+
+    // 5) If we can’t map them, still finish gracefully (they can log in manually)
+    if (!u) {
+      showToast('Password set. Please log in with your username.', 'success');
+      setShowForceReset(false);
+      setNewPass('');
+      setNewPass2('');
+      setRoute('login');
+      return;
+    }
+
+    // 6) Store password locally so your Login screen accepts it (username → password)
+    //    These helpers/constants already exist in your app; if TS complains, keep the casts.
+    const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
+    pwMap[u.username] = newPass;
+    saveLS(LS_PASSWORDS, pwMap);
+
+    // 7) Mark the user Active in your local list and ensure email is saved
+    //    If your status field is named differently (e.g., is_active), tweak here.
+    setUsers((prev: any[]) =>
+      prev.map((x: any) =>
+        x.id === u.id
+          ? {
+              ...x,
+              status: 'Active' as UserStatus,
+              email: x.email || email,
+            }
+          : x
+      )
+    );
+
+    // 8) Close modal, clear fields, create a session, and route to Home
     setShowForceReset(false);
     setNewPass('');
     setNewPass2('');
 
-    // Send them to Home
-    window.location.replace('/');
+    setSession({ username: u.username, role: u.role });
+    setRoute('dealer-search'); // your Home screen
+
+    showToast('Password set. You are logged in.', 'success');
   } catch (e: any) {
     showToast(e?.message || 'Failed to set password', 'error');
   }
@@ -2892,6 +2994,19 @@ const handleSaveNewPassword = async () => {
       <p className="text-sm text-slate-500">
         Welcome! Please create your password to finish setting up your account.
       </p>
+{/* Read-only identity fields */}
+<TextField
+  label="Username"
+  value={resetUsername || '(loading…)'}
+  onChange={() => {}}
+  disabled
+/>
+<TextField
+  label="Email"
+  value={resetEmail || ''}
+  onChange={() => {}}
+  disabled
+/>
 
       <TextField
         label="New Password"
@@ -2921,39 +3036,6 @@ const handleSaveNewPassword = async () => {
           Save Password
         </button>
       </div>
-    </div>
-  </Modal>
-)}
-      {showForceReset && (
-  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
-    <div className="grid md:grid-cols-2 gap-3">
-      <TextField
-        label="New Password"
-        type="password"
-        value={newPass}
-        onChange={(v) => setNewPass(v)}
-      />
-      <TextField
-        label="Confirm Password"
-        type="password"
-        value={newPass2}
-        onChange={(v) => setNewPass2(v)}
-      />
-    </div>
-
-    <div className="mt-4 flex justify-end gap-2">
-      <button
-        className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
-        onClick={() => setShowForceReset(false)}
-      >
-        Cancel
-      </button>
-      <button
-        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white"
-        onClick={handleSaveNewPassword}
-      >
-        Save Password
-      </button>
     </div>
   </Modal>
 )}
