@@ -2668,6 +2668,87 @@ const App: React.FC = () => {
       setResetOpen(true);
     }
   }, []);
+// --- Supabase invite/recovery reset detection (TOP-LEVEL) ---
+// These states are the "light switches" we flip when a Supabase link is used.
+// (It's okay if your editor warns they're unused right now. In Step 2 we'll use them.)
+const [showForceReset, setShowForceReset] = useState(false);
+const [newPass, setNewPass] = useState('');
+const [newPass2, setNewPass2] = useState('');
+
+// Make sure we only open the modal once per page load.
+const openedResetRef = useRef(false);
+const openResetOnce = () => {
+  if (openedResetRef.current) return;
+  openedResetRef.current = true;
+  setShowForceReset(true);
+};
+
+// Read auth params from BOTH the hash (#...) and the query (?...)
+const parseAuthParams = () => {
+  const url = new URL(window.location.href);
+  const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+  const hash = new URLSearchParams(rawHash || '');
+  const search = url.searchParams;
+
+  const type = (hash.get('type') || search.get('type') || '').toLowerCase();
+  const hasAccessToken = hash.has('access_token') || search.has('access_token');
+  const next = (search.get('next') || '').toLowerCase();
+
+  // Open if it's a recovery/invite, OR if an access_token is present, OR next=/reset hint is present
+  const shouldOpen = type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
+  return { shouldOpen, type };
+};
+
+// A) Run once on page load
+useEffect(() => {
+  console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
+  const { shouldOpen } = parseAuthParams();
+  if (shouldOpen) {
+    console.debug('[auth] open reset via initial parse');
+    openResetOnce();
+
+    // Give Supabase a moment to read tokens, then clean the URL
+    setTimeout(() => {
+      const url = new URL(window.location.href);
+      url.hash = '';
+      if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
+        url.searchParams.delete('next');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }, 800);
+  }
+}, []);
+
+// B) Safety-net: listen to Supabase auth events
+useEffect(() => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      console.debug('[auth] PASSWORD_RECOVERY');
+      openResetOnce();
+    } else if (event === 'SIGNED_IN') {
+      const { shouldOpen } = parseAuthParams();
+      if (shouldOpen) {
+        console.debug('[auth] SIGNED_IN + shouldOpen');
+        openResetOnce();
+      }
+    }
+  });
+  return () => subscription.unsubscribe();
+}, []);
+
+// C) Extra safety: if the URL hash changes after load
+useEffect(() => {
+  const onHash = () => {
+    const { shouldOpen } = parseAuthParams();
+    if (shouldOpen) {
+      console.debug('[auth] hashchange -> open reset');
+      openResetOnce();
+    }
+  };
+  window.addEventListener('hashchange', onHash, { passive: true });
+  return () => window.removeEventListener('hashchange', onHash);
+}, []);
+// --- end top-level detection ---
 
   const can = useMemo(() => {
     const role = session?.role;
@@ -2775,11 +2856,107 @@ const App: React.FC = () => {
       );
     }
   }
+// Save Password for Supabase invite/recovery
+const handleSaveNewPassword = async () => {
+  try {
+    if (!newPass || newPass.length < 8) {
+      showToast('Password must be at least 8 characters.', 'error');
+      return;
+    }
+    if (newPass !== newPass2) {
+      showToast('Passwords do not match.', 'error');
+      return;
+    }
 
+    const { error } = await supabase.auth.updateUser({ password: newPass });
+    if (error) throw error;
+
+    showToast('Password set. You are logged in.', 'success');
+    setShowForceReset(false);
+    setNewPass('');
+    setNewPass2('');
+
+    // Send them to Home
+    window.location.replace('/');
+  } catch (e: any) {
+    showToast(e?.message || 'Failed to set password', 'error');
+  }
+};
   return (
     <>
       {body}
       <ToastHost toasts={toasts} dismiss={dismiss} />
+      {showForceReset && (
+  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
+    <div className="grid gap-3">
+      <p className="text-sm text-slate-500">
+        Welcome! Please create your password to finish setting up your account.
+      </p>
+
+      <TextField
+        label="New Password"
+        type="password"
+        value={newPass}
+        onChange={(v) => setNewPass(v)}
+      />
+
+      <TextField
+        label="Confirm Password"
+        type="password"
+        value={newPass2}
+        onChange={(v) => setNewPass2(v)}
+      />
+
+      <div className="flex gap-2 justify-end">
+        <button
+          className="px-3 py-2 rounded-lg border"
+          onClick={() => setShowForceReset(false)}
+        >
+          Cancel
+        </button>
+        <button
+          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
+          onClick={handleSaveNewPassword}
+        >
+          Save Password
+        </button>
+      </div>
+    </div>
+  </Modal>
+)}
+      {showForceReset && (
+  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
+    <div className="grid md:grid-cols-2 gap-3">
+      <TextField
+        label="New Password"
+        type="password"
+        value={newPass}
+        onChange={(v) => setNewPass(v)}
+      />
+      <TextField
+        label="Confirm Password"
+        type="password"
+        value={newPass2}
+        onChange={(v) => setNewPass2(v)}
+      />
+    </div>
+
+    <div className="mt-4 flex justify-end gap-2">
+      <button
+        className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
+        onClick={() => setShowForceReset(false)}
+      >
+        Cancel
+      </button>
+      <button
+        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white"
+        onClick={handleSaveNewPassword}
+      >
+        Save Password
+      </button>
+    </div>
+  </Modal>
+)}
       {resetOpen && (
         <ResetInviteModal
           token={resetToken}
@@ -3287,30 +3464,6 @@ const generateInvite = async () => {
   }
 };
 
-// NEW: reset-password handler (must be OUTSIDE generateInvite)
-const handleSaveNewPassword = async () => {
-  try {
-    if (!newPass || newPass.length < 8) {
-      showToast('Password must be at least 8 characters.', 'error');
-      return;
-    }
-    if (newPass !== newPass2) {
-      showToast('Passwords do not match.', 'error');
-      return;
-    }
-
-    const { error } = await supabase.auth.updateUser({ password: newPass });
-    if (error) throw error;
-
-    showToast('Password set. You are logged in.', 'success');
-    setShowForceReset(false);
-    setNewPass('');
-    setNewPass2('');
-  } catch (e: any) {
-    showToast(e?.message || 'Failed to set password', 'error');
-  }
-};
-
 const copyInvite = async () => {
   if (!inviteUrl) return;
   try {
@@ -3788,45 +3941,6 @@ const handleImportDealers = async (file?: File | null) => {
           </div>
         </Modal>
       )}
-
-{showForceReset && (
-  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
-    <div className="grid gap-3">
-      <p className="text-sm text-slate-500">
-        Welcome! Please create your password to finish setting up your account.
-      </p>
-
-      <TextField
-        label="New Password"
-        type="password"
-        value={newPass}
-        onChange={(v) => setNewPass(v)}
-      />
-
-      <TextField
-        label="Confirm Password"
-        type="password"
-        value={newPass2}
-        onChange={(v) => setNewPass2(v)}
-      />
-
-      <div className="flex gap-2 justify-end">
-        <button
-          className="px-3 py-2 rounded-lg border"
-          onClick={() => setShowForceReset(false)}
-        >
-          Cancel
-        </button>
-        <button
-          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
-          onClick={handleSaveNewPassword}
-        >
-          Save Password
-        </button>
-      </div>
-    </div>
-  </Modal>
-)}
 
       {/* NEW: Confirm Remove User */}
       {confirmRemove && (
