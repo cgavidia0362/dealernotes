@@ -2759,37 +2759,37 @@ useEffect(() => {
   (async () => {
     try {
       // 1) Read the authed user from the invite/recovery token
-      const { data } = await supabase.auth.getUser();
-      const email = (data?.user?.email || '').toLowerCase();
-      setResetEmail(email);
+  // 1) Read email from Supabase
+const { data } = await supabase.auth.getUser();   // <-- capital U
+const emailLower = (data?.user?.email || '').toLowerCase();
+setResetEmail(emailLower);
 
-      // 2) Try to find the matching app user from the in-memory list
-      //    (email match first, then fallback to username==email)
-      let u =
-        (Array.isArray(users) &&
-          users.find(
-            (x: any) =>
-              (x?.email || '').toLowerCase() === email ||
-              (x?.username || '').toLowerCase() === email
-          )) ||
-        null;
+// 2) Also compute the local-part (before the '@') as a good fallback username
+const local = emailLower.split('@')[0] || '';
 
-      // 3) Optional DB fallback (only if you actually have a 'users' table)
-      if (!u && email) {
-        try {
-          const r = await supabase
-            .from('users') // <-- change if your table is named differently
-            .select('id, username, email')
-            .eq('email', email)
-            .single();
-          if (!r.error && r.data) u = r.data as any;
-        } catch {
-          /* ignore — modal still works without this */
-        }
-      }
+// 3) Try to match an app user from memory
+let u =
+  (Array.isArray(users) &&
+    (users.find((x: any) => (x?.email || '').toLowerCase() === emailLower) ||
+     users.find((x: any) => (x?.username || '').toLowerCase() === emailLower) ||
+     users.find((x: any) => (x?.username || '').toLowerCase() === local))) ||
+  null;
 
-      setResetUser(u);
-      setResetUsername(u?.username || '');
+// 4) Optional DB fallback (only if you have a 'users' table)
+if (!u && emailLower) {
+  try {
+    const r = await supabase
+      .from('users')                           // change if your table is named differently
+      .select('id, username, email')
+      .or(`email.eq.${emailLower},username.eq.${local}`)
+      .single();
+    if (!r.error && r.data) u = r.data as any;
+  } catch { /* ignore */ }
+}
+
+// 5) Fill username with best available value (prevents "(loading...)")
+setResetUser(u);
+setResetUsername(u?.username || local || emailLower);
     } catch {
       // Non-fatal: modal still works without the name
       setResetUser(null);
@@ -2923,23 +2923,20 @@ const handleSaveNewPassword = async () => {
     const { error } = await supabase.auth.updateUser({ password: newPass });
     if (error) throw error;
 
-    // 3) Identify which app user this is (via Supabase email)
-    //    We already set resetEmail/resetUsername in Step 1B, but re-read to be safe.
-    let email = (resetEmail || '').toLowerCase();
-    if (!email) {
-      const { data } = await supabase.auth.getUser();
-      email = (data?.user?.email || '').toLowerCase();
-    }
+   // 3) Identify which app user this is (no extra network call needed)
+const emailLower = (resetEmail || '').toLowerCase();
+const local = emailLower.split('@')[0] || '';
+const candidates = [resetUsername.toLowerCase(), emailLower, local].filter(Boolean);
 
-    // 4) Find the user in your in-memory list
-    const u =
-      (Array.isArray(users) &&
-        users.find(
-          (x: any) =>
-            (x?.email || '').toLowerCase() === email ||
-            (x?.username || '').toLowerCase() === email
-        )) ||
-      null;
+// 4) Find the user in your in-memory list by any of the candidates
+const u =
+  (Array.isArray(users) &&
+    users.find((x: any) => {
+      const uname = (x?.username || '').toLowerCase();
+      const em = (x?.email || '').toLowerCase();
+      return candidates.includes(uname) || candidates.includes(em);
+    })) ||
+  null;
 
     // 5) If we can’t map them, still finish gracefully (they can log in manually)
     if (!u) {
@@ -2965,7 +2962,7 @@ const handleSaveNewPassword = async () => {
           ? {
               ...x,
               status: 'Active' as UserStatus,
-              email: x.email || email,
+              email: x.email || resetEmail,
             }
           : x
       )
