@@ -2819,40 +2819,45 @@ useEffect(() => {
 
   (async () => {
     try {
-      // 1) Read the authed user from the invite/recovery token
-  // 1) Read email from Supabase
-// 1) Read email robustly
-const emailLower = await getEmailFromAuth();
-setResetEmail(emailLower);
+      // 1) Read email robustly (already added earlier)
+      const emailLower = await getEmailFromAuth();
+      setResetEmail(emailLower);
 
-// 2) Fallback username = local part of email (before '@')
-const local = emailLower.split('@')[0] || '';
+      // NEW: read user metadata from the adopted session
+      const { data: uinfo } = await supabase.auth.getUser();
+      const metaUsername = (uinfo?.user?.user_metadata?.username || '').toString().trim();
 
-// 3) Try to match an app user from memory
-let u =
-  (Array.isArray(users) &&
-    (users.find((x: any) => (x?.email || '').toLowerCase() === emailLower) ||
-     users.find((x: any) => (x?.username || '').toLowerCase() === emailLower) ||
-     users.find((x: any) => (x?.username || '').toLowerCase() === local))) ||
-  null;
+      // 2) Fallback username = local part of email (before '@')
+      const local = emailLower.split('@')[0] || '';
 
-// 4) Optional DB fallback if you actually have a 'users' table
-if (!u && emailLower) {
-  try {
-    const r = await supabase
-      .from('users') // change if your table name differs
-      .select('id, username, email')
-      .or(`email.eq.${emailLower},username.eq.${local}`)
-      .single();
-    if (!r.error && r.data) u = r.data as any;
-  } catch { /* ignore */ }
-}
+      // 3) Try to match an app user from memory (optional)
+      let u =
+        (Array.isArray(users) &&
+          (users.find(x => (x?.email || '').toLowerCase() === emailLower) ||
+           users.find(x => (x?.username || '').toLowerCase() === emailLower) ||
+           users.find(x => (x?.username || '').toLowerCase() === local))) ||
+        null;
 
-// 5) Always show something useful (no more "(loading…)")
-setResetUser(u);
-setResetUsername(u?.username || local || emailLower);
+      // 4) Optional DB fallback (only if you actually have a 'users' table)
+      if (!u && emailLower) {
+        try {
+          const r = await supabase
+            .from('users') // change if your table name differs, or remove this block if you don't have it
+            .select('id, username, email')
+            .or(`email.eq.${emailLower},username.eq.${local}`)
+            .single();
+          if (!r.error && r.data) u = r.data as any;
+        } catch {}
+      }
+
+      // 5) Prefer metadata → else matched user → else local/email
+      const chosenUsername = metaUsername || u?.username || local || emailLower;
+      setResetUser(u);
+      setResetUsername(chosenUsername);
+
+      // Helpful debug if you need it:
+      console.debug('[reset-modal]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
     } catch {
-      // Non-fatal: modal still works without the name
       setResetUser(null);
       setResetUsername('');
     }
@@ -3571,21 +3576,25 @@ const generateInvite = async () => {
       return;
     }
 
-    // Call the API route
-    const r = await fetch('/api/generate-invite', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
+   // Call the API route
+const r = await fetch('/api/generate-invite', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    email,
+    metadata: { username: (draft.username || '').trim() }, // pass the admin-picked username
+  }),
+});
 
-    const json = await r.json().catch(() => ({} as any));
-    if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
+const json = (await r.json().catch(() => ({} as any))) as any;
+if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
 
-    // Support multiple Supabase response shapes just in case
-    const link: string | undefined =
-      (json as any)?.link ??
-      (json as any)?.properties?.action_link ??
-      (json as any)?.action_link;
+// Support multiple Supabase response shapes just in case
+const link: string | undefined =
+  json?.link ??
+  json?.data?.properties?.action_link ??
+  json?.data?.action_link ??
+  undefined;
 
     if (link) {
       // store full link; the inviteUrl getter above will use it directly
