@@ -2687,40 +2687,67 @@ const [resetUser, setResetUser] = useState<User | null>(null);
 const [resetUsername, setResetUsername] = useState('');
 const [resetEmail, setResetEmail] = useState('');
 
-// Read auth params from BOTH the hash (#...) and the query (?...)
+// Read auth params from BOTH the hash (#...) and the query (?...) and return tokens too
 const parseAuthParams = () => {
   const url = new URL(window.location.href);
+
   const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
   const hash = new URLSearchParams(rawHash || '');
   const search = url.searchParams;
 
   const type = (hash.get('type') || search.get('type') || '').toLowerCase();
-  const hasAccessToken = hash.has('access_token') || search.has('access_token');
+  const access_token =
+    hash.get('access_token') || search.get('access_token') || '';
+  const refresh_token =
+    hash.get('refresh_token') || search.get('refresh_token') || '';
   const next = (search.get('next') || '').toLowerCase();
 
-  // Open if it's a recovery/invite, OR if an access_token is present, OR next=/reset hint is present
-  const shouldOpen = type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
-  return { shouldOpen, type };
-};
+  const hasAccessToken = !!access_token;
+  const shouldOpen =
+    type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
 
+  return { shouldOpen, type, access_token, refresh_token };
+};
+// If the URL carries tokens, adopt that session so we're acting as the invited user
+const adoptSessionFromUrl = async () => {
+  try {
+    const { access_token, refresh_token } = parseAuthParams();
+    if (!access_token) return;
+
+    await supabase.auth.setSession({
+      access_token,
+      refresh_token: refresh_token || ''
+    });
+
+    console.debug('[auth] adopted session from URL tokens');
+  } catch (err) {
+    console.debug('[auth] setSession failed', err);
+  }
+};
 // A) Run once on page load
 useEffect(() => {
-  console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
-  const { shouldOpen } = parseAuthParams();
-  if (shouldOpen) {
-    console.debug('[auth] open reset via initial parse');
-    openResetOnce();
+  (async () => {
+    console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
 
-    // Give Supabase a moment to read tokens, then clean the URL
-    setTimeout(() => {
-      const url = new URL(window.location.href);
-      url.hash = '';
-      if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
-        url.searchParams.delete('next');
-      }
-      window.history.replaceState({}, '', url.toString());
-    }, 800);
-  }
+    const { shouldOpen } = parseAuthParams();
+    if (shouldOpen) {
+      // 1) switch to the invited user's session (even if admin is logged in)
+      await adoptSessionFromUrl();
+
+      // 2) now open the modal
+      openResetOnce();
+
+      // 3) give Supabase a moment, then clean the URL (remove tokens & next)
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.hash = '';
+        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
+          url.searchParams.delete('next');
+        }
+        window.history.replaceState({}, '', url.toString());
+      }, 800);
+    }
+  })();
 }, []);
 
 // B) Safety-net: listen to Supabase auth events
@@ -2741,16 +2768,31 @@ useEffect(() => {
 }, []);
 
 // C) Extra safety: if the URL hash changes after load
+// C) Extra safety: if the URL hash changes after load, adopt session then open modal
 useEffect(() => {
-  const onHash = () => {
+  const onHash = async () => {
     const { shouldOpen } = parseAuthParams();
     if (shouldOpen) {
-      console.debug('[auth] hashchange -> open reset');
+      // 1) switch to the invited user's session (even if someone else is logged in)
+      await adoptSessionFromUrl();
+
+      // 2) open the reset modal
       openResetOnce();
+
+      // 3) clean the URL after a moment (removes tokens and next=/reset)
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.hash = '';
+        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
+          url.searchParams.delete('next');
+        }
+        window.history.replaceState({}, '', url.toString());
+      }, 800);
     }
   };
-  window.addEventListener('hashchange', onHash, { passive: true });
-  return () => window.removeEventListener('hashchange', onHash);
+
+  window.addEventListener('hashchange', onHash as any, { passive: true } as any);
+  return () => window.removeEventListener('hashchange', onHash as any);
 }, []);
 // Robust helper: read authed email from the invite/recovery sign-in
 const getEmailFromAuth = async (): Promise<string> => {
