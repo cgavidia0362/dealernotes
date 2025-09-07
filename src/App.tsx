@@ -2820,7 +2820,10 @@ useEffect(() => {
   (async () => {
     try {
       await adoptSessionFromUrl(); // NEW: ensure we are the invited user before reading getUser()
-
+      console.debug('[auth] tokens parsed', parseAuthParams());
+      console.debug('[after adopt] getUser()', await supabase.auth.getUser());
+      console.debug('[after adopt] getSession()', await supabase.auth.getSession());
+      
       // 1) Read email robustly (from adopted session)
       const emailLower = await getEmailFromAuth();
       setResetEmail(emailLower);
@@ -2854,7 +2857,8 @@ useEffect(() => {
   
       // 6) Prefer metadata → else matched user → else local/email
       const chosenUsername = metaUsername || (u?.username || '') || local || emailLower;
-  
+      console.debug('[reset-modal chosen]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
+
       setResetUser(u);
       setResetUsername(chosenUsername);  
 
