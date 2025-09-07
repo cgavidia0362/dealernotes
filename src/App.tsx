@@ -2819,41 +2819,44 @@ useEffect(() => {
 
   (async () => {
     try {
-      // 1) Read email robustly (already added earlier)
+      await adoptSessionFromUrl(); // NEW: ensure we are the invited user before reading getUser()
+
+      // 1) Read email robustly (from adopted session)
       const emailLower = await getEmailFromAuth();
       setResetEmail(emailLower);
-
-      // NEW: read user metadata from the adopted session
+  
+      // 2) Pull the admin-picked username from user_metadata if present
       const { data: uinfo } = await supabase.auth.getUser();
-      const metaUsername = (uinfo?.user?.user_metadata?.username || '').toString().trim();
-
-      // 2) Fallback username = local part of email (before '@')
+      const metaUsername = String(uinfo?.user?.user_metadata?.username || '').trim();
+  
+      // 3) Fallback username = local part of email (before '@')
       const local = emailLower.split('@')[0] || '';
-
-      // 3) Try to match an app user from memory (optional)
+  
+      // 4) Try to match an app user from memory (optional)
       let u =
         (Array.isArray(users) &&
           (users.find(x => (x?.email || '').toLowerCase() === emailLower) ||
            users.find(x => (x?.username || '').toLowerCase() === emailLower) ||
            users.find(x => (x?.username || '').toLowerCase() === local))) ||
         null;
-
-      // 4) Optional DB fallback (only if you actually have a 'users' table)
+  
+      // 5) Optional DB fallback (only if you actually have a 'users' table)
       if (!u && emailLower) {
         try {
           const r = await supabase
-            .from('users') // change if your table name differs, or remove this block if you don't have it
+            .from('users') // change if your table differs, or remove if not used
             .select('id, username, email')
             .or(`email.eq.${emailLower},username.eq.${local}`)
             .single();
           if (!r.error && r.data) u = r.data as any;
-        } catch {}
+        } catch { /* ignore */ }
       }
-
-      // 5) Prefer metadata → else matched user → else local/email
-      const chosenUsername = metaUsername || u?.username || local || emailLower;
+  
+      // 6) Prefer metadata → else matched user → else local/email
+      const chosenUsername = metaUsername || (u?.username || '') || local || emailLower;
+  
       setResetUser(u);
-      setResetUsername(chosenUsername);
+      setResetUsername(chosenUsername);  
 
       // Helpful debug if you need it:
       console.debug('[reset-modal]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
