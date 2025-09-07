@@ -2752,6 +2752,25 @@ useEffect(() => {
   window.addEventListener('hashchange', onHash, { passive: true });
   return () => window.removeEventListener('hashchange', onHash);
 }, []);
+// Robust helper: read authed email from the invite/recovery sign-in
+const getEmailFromAuth = async (): Promise<string> => {
+  try {
+    const { data } = await supabase.auth.getUser(); // capital U
+    const e = (data?.user?.email || '').toLowerCase();
+    if (e) return e;
+  } catch (err) {
+    console.debug('[auth] getUser() failed', err);
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    const e = (data?.session?.user?.email || '').toLowerCase();
+    if (e) return e;
+  } catch (err) {
+    console.debug('[auth] getSession() failed', err);
+  }
+  return '';
+};
+
 // When the reset modal opens, read Supabase user -> map to our app user
 useEffect(() => {
   if (!showForceReset) return;
@@ -2760,11 +2779,11 @@ useEffect(() => {
     try {
       // 1) Read the authed user from the invite/recovery token
   // 1) Read email from Supabase
-const { data } = await supabase.auth.getUser();   // <-- capital U
-const emailLower = (data?.user?.email || '').toLowerCase();
+// 1) Read email robustly
+const emailLower = await getEmailFromAuth();
 setResetEmail(emailLower);
 
-// 2) Also compute the local-part (before the '@') as a good fallback username
+// 2) Fallback username = local part of email (before '@')
 const local = emailLower.split('@')[0] || '';
 
 // 3) Try to match an app user from memory
@@ -2775,11 +2794,11 @@ let u =
      users.find((x: any) => (x?.username || '').toLowerCase() === local))) ||
   null;
 
-// 4) Optional DB fallback (only if you have a 'users' table)
+// 4) Optional DB fallback if you actually have a 'users' table
 if (!u && emailLower) {
   try {
     const r = await supabase
-      .from('users')                           // change if your table is named differently
+      .from('users') // change if your table name differs
       .select('id, username, email')
       .or(`email.eq.${emailLower},username.eq.${local}`)
       .single();
@@ -2787,7 +2806,7 @@ if (!u && emailLower) {
   } catch { /* ignore */ }
 }
 
-// 5) Fill username with best available value (prevents "(loading...)")
+// 5) Always show something useful (no more "(loading…)")
 setResetUser(u);
 setResetUsername(u?.username || local || emailLower);
     } catch {
@@ -2951,8 +2970,9 @@ const u =
     // 6) Store password locally so your Login screen accepts it (username → password)
     //    These helpers/constants already exist in your app; if TS complains, keep the casts.
     const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
-    pwMap[u.username] = newPass;
-    saveLS(LS_PASSWORDS, pwMap);
+    pwMap[u.username] = newPass;                       // original case
+    pwMap[u.username.toLowerCase()] = newPass;         // case-insensitive login
+    saveLS(LS_PASSWORDS, pwMap);    
 
     // 7) Mark the user Active in your local list and ensure email is saved
     //    If your status field is named differently (e.g., is_active), tweak here.
