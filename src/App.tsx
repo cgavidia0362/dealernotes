@@ -3731,10 +3731,28 @@ useEffect(() => {
   const [confirmRemove, setConfirmRemove] = useState<User | null>(null);
 
   // Was: removeUser(id) -> now internal “performRemove” used after confirm
-  const performRemove = (id: string) => {
+  const performRemove = async (id: string) => {
     const u = users.find((x) => x.id === id);
+
+    // 1) Try server-side delete if this is a real Supabase auth UUID
+    const isUUID = /^[0-9a-fA-F-]{36}$/.test(id);
+    if (isUUID) {
+      try {
+        const r = await fetch('/api/admin-delete-user', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+        const json = (await r.json().catch(() => ({} as any))) as any;
+        if (!r.ok) throw new Error(json?.error || 'Failed to delete on server');
+      } catch (e: any) {
+        // We still remove locally so UI is consistent, but let admin know
+        showToast(e?.message || 'Removed locally, but server delete failed', 'error');
+      }
+    }
+
+    // 2) Local clean-up (your original logic)
     if (u) {
-      // clean up status & password maps
       const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
       const disabledMap = loadLS<Record<string, string>>(LS_DISABLED_PASSWORDS, {});
       delete pwMap[u.username];
@@ -3747,8 +3765,8 @@ useEffect(() => {
         return n;
       });
     }
-    setUsers((prev) => prev.filter((u) => u.id !== id));
-    showToast("User removed.", "success");
+    setUsers((prev) => prev.filter((x) => x.id !== id));
+    showToast('User removed.', 'success');
   };
 
 // Only in EDIT: Generate + Copy invite link via serverless API
