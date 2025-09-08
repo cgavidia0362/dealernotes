@@ -2993,6 +2993,7 @@ useEffect(() => {
           }
           return next;
         });
+    
       } catch (err) {
         console.debug("[profiles] load failed", err);
       }
@@ -3543,7 +3544,20 @@ const UserManagementView: React.FC<{
   // ---------- Status & auth side-maps ----------
   const [statusMap, setStatusMap] = useState<Record<string, "Active" | "Inactive">>(() => loadLS(LS_USER_STATUS, {}));
   useEffect(() => saveLS(LS_USER_STATUS, statusMap), [statusMap]);
-
+// Keep the edit modal radios in sync with what we loaded into users
+useEffect(() => {
+  if (!users || users.length === 0) return;
+  setStatusMap((prev) => {
+    const next = { ...prev };
+    for (const u of users) {
+      if (u?.username) {
+        // use the status we merged into users (from Supabase profiles)
+        next[u.username] = ((u.status as UserStatus) ?? "Active") as UserStatus;
+      }
+    }
+    return next;
+  });
+}, [users]);
   const getStatus = (u: User): UserStatus => (statusMap[u.username] || u.status || "Inactive") as UserStatus;
 
   // ---------- Users table + modal ----------
@@ -3634,21 +3648,59 @@ useEffect(() => {
     });
   };
 
-  const saveUser = () => {
-    if (!draft.name.trim() || !draft.username.trim()) return showToast("Name and username are required.", "error");
+  const saveUser = async () => {
+    if (!draft.name.trim() || !draft.username.trim()) {
+      showToast("Name and username are required.", "error");
+      return;
+    }
     const usernameTaken = users.some((u) => u.username === draft.username && u.id !== draft.id);
     if (usernameTaken) return showToast("Username already exists.", "error");
 
+    // status from the radio (stored in statusMap) or the draft, default Active
+    const chosenStatus: UserStatus =
+      (statusMap[draft.username] as UserStatus) ||
+      ((draft as any).status as UserStatus) ||
+      "Active";
+
+    // Helpful: if the Email field is empty but Username is an email, use that
+    const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim();
+
     if (editingId) {
-      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft } : u)));
-      showToast("User updated.", "success");
+      // 1) Update local list immediately so the UI reflects the change
+      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft, status: chosenStatus } : u)));
+      setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
+      setUserModalOpen(false);
+
+      // 2) If this user came from Supabase (has a real auth UUID), persist to profiles
+      const isUUID = /^[0-9a-fA-F-]{36}$/.test(editingId);
+      if (isUUID && emailForProfile) {
+        try {
+          const { error } = await supabase
+            .from("profiles")
+            .update({
+              username: draft.username,
+              email: emailForProfile,
+              role: draft.role,
+              status: chosenStatus,
+            })
+            .eq("id", editingId);
+          if (error) throw error;
+          showToast("Saved to Supabase.", "success");
+        } catch (err: any) {
+          showToast(err?.message || "Saved locally, but failed to save to Supabase.", "error");
+        }
+      } else {
+        // Local-only user (no auth id yet) — invite flow will create their profiles row
+        showToast("Saved locally. Generate an invite to create this user in Supabase.", "success");
+      }
     } else {
-      setUsers((prev) => [{ ...draft }, ...prev]);
-      // Default new users to Inactive (no password yet)
-      setStatusMap((m) => ({ ...m, [draft.username]: "Inactive" }));
+      // New local user (not in Supabase yet)
+      setUsers((prev) => [{ ...draft, status: chosenStatus }, ...prev]);
+      setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
+      setUserModalOpen(false);
       showToast("User added.", "success");
+      // No Supabase write here — /api/generate-invite will upsert the profiles row.
     }
-    setUserModalOpen(false);
   };
 
   // ---- NEW: Remove confirmation modal ----
