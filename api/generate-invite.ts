@@ -60,6 +60,23 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: error.message || 'Failed to generate link' });
   }
 
+  // ---- 2.5) NEW: upsert profiles on INVITE when we have a user id ----
+  try {
+    const userId = (data as any)?.user?.id;
+    if (userId) {
+      const username = ((metadata && (metadata as any).username) || email.split('@')[0]).toString();
+      const { error: upsertErr } = await supabase
+        .from('profiles')
+        .upsert(
+          { id: userId, email, username, role: 'Rep', status: 'Active' },
+          { onConflict: 'id' }
+        );
+      if (upsertErr) console.error('profiles upsert (invite) failed:', upsertErr);
+    }
+  } catch (e) {
+    console.error('profiles upsert try/catch:', e);
+  }
+
   // Supabase can return different shapes depending on version
   const link =
     (data as any)?.properties?.action_link ??
