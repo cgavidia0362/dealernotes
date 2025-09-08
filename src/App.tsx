@@ -2944,7 +2944,60 @@ useEffect(() => {
     if (!session || session.role !== "Rep") return [];
     return tasks.filter((t) => t.repUsername === session.username && !t.completedAtISO);
   }, [tasks, session]);
+  // === Step 3A: Load live users from Supabase profiles (read-only) ===
+  // We merge profiles (role/status/email) into our local users list.
+  useEffect(() => {
+    // Only try after someone is logged in (so RLS knows who we are).
+    if (!session) return;
 
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, email, username, role, status");
+
+        if (error) throw error;
+
+        setUsers((prev) => {
+          const byUsername = new Map(prev.map((u) => [u.username.toLowerCase(), u]));
+          const next = [...prev];
+
+          for (const p of data || []) {
+            const pEmail = (p as any).email as string | null;
+            const pUsername =
+              ((p as any).username as string | undefined) ||
+              (pEmail ? pEmail.split("@")[0] : "");
+
+            const key = (pUsername || "").toLowerCase();
+            const existing = byUsername.get(key);
+
+            if (existing) {
+              // Update role/status/email on existing user
+              existing.email = pEmail || existing.email;
+              existing.role = ((p as any).role || existing.role) as Role;
+              existing.status = ((p as any).status || existing.status) as UserStatus;
+            } else {
+              // Add a minimal new user record so the table can display it
+              next.push({
+                id: ((p as any).id as string) || uid(),
+                name: pUsername || pEmail || "User",
+                username: pUsername || (pEmail ? pEmail.split("@")[0] : "user"),
+                email: pEmail || undefined,
+                role: (((p as any).role as Role) ?? "Rep") as Role,
+                states: [],
+                regionsByState: {},
+                phone: "",
+                status: (((p as any).status as UserStatus) ?? "Active") as UserStatus,
+              });
+            }
+          }
+          return next;
+        });
+      } catch (err) {
+        console.debug("[profiles] load failed", err);
+      }
+    })();
+  }, [session]); // runs after login; refresh page to re-sync
   const handleClickTask = (t: Task) => {
     saveLS(LS_LAST_SELECTED_DEALER, t.dealerId);
     setRoute("dealer-notes");
