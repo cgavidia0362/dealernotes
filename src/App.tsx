@@ -331,63 +331,96 @@ const LoginView: React.FC<{
   
   const handle = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Treat the "Username" box as an email for now
+  
+    // Treat the "Username" box as EMAIL for now
     const email = username.trim().toLowerCase();
     if (!email || !password) {
       showToast("Enter email and password.", "error");
       return;
     }
-
-    try {
-      // 1) Try real Supabase login
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-
-      const user = data.user;
-      // Pick a friendly display name:
-      const chosenUsername =
-        (user?.user_metadata?.username as string) ||
-        email.split("@")[0];
-
-      // Success → put them in the app
-      onLogin({ username: chosenUsername, role: "Rep" });
-      showToast(`Welcome, ${chosenUsername}!`, "success");
-    } catch (err: any) {
-      // 2) TEMP fallback to your old local password map so nobody is blocked during cutover
+  
+    // In production, supabase.auth.signInWithPassword exists.
+    // In StackBlitz (stub client), it may not exist; we'll fall back to the legacy local login below.
+    const canSupabase: boolean =
+      typeof (supabase as any)?.auth?.signInWithPassword === "function";
+  
+    if (canSupabase) {
       try {
-        const users = loadLS<User[]>(LS_USERS, []);
-        const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
-        const u =
-          users.find(
-            (x) =>
-              (x.email || "").toLowerCase() === email ||
-              (x.username || "").toLowerCase() === email ||
-              (x.username || "").toLowerCase() === email.split("@")[0]
-          ) || null;
-
-        if (!u) throw new Error("Invalid credentials.");
-
-        if ((u.status ?? "Active") === "Inactive") {
-          showToast("Your account is inactive. Please contact an administrator.", "error");
+        // 1) Real Supabase login
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+  
+        const user = data.user;
+        const userId = user?.id as string;
+  
+        // 2) Read the user's profile (username/role/status) from Supabase
+        let chosenUsername = (user?.user_metadata?.username as string) || email.split("@")[0];
+        let role: Role = "Rep";
+        let status: UserStatus = "Active";
+  
+        try {
+          const { data: prof } = await supabase
+            .from("profiles")
+            .select("username, role, status")
+            .eq("id", userId)
+            .maybeSingle();
+  
+          if (prof) {
+            chosenUsername = (prof.username as string) || chosenUsername;
+            role = (prof.role as Role) || role;
+            status = (prof.status as UserStatus) || status;
+          } else {
+            // 3) If no row yet, create it (RLS policy lets users insert their own row)
+            await supabase.from("profiles").upsert(
+              { id: userId, email, username: chosenUsername, role, status },
+              { onConflict: "id" }
+            );
+          }
+        } catch {
+          // Table might not exist yet or RLS blocked — continue with defaults
+        }
+  
+        // 4) Block inactive users
+        if (status === "Inactive") {
+          showToast("Your account is inactive. Contact an administrator.", "error");
+          await supabase.auth.signOut();
           return;
         }
-
-        const storedPw = pwMap[u.username];
-        if (storedPw && storedPw === password) {
-          onLogin({ username: u.username, role: u.role });
-          showToast(`Welcome, ${u.username}!`, "success");
-          return;
-        }
-        throw new Error("Invalid credentials.");
-      } catch (fallbackErr: any) {
-        showToast(err?.message || fallbackErr?.message || "Invalid credentials.", "error");
+  
+        // 5) Success — enter app with role from profiles (or default)
+        onLogin({ username: chosenUsername, role });
+        showToast(`Welcome, ${chosenUsername}!`, "success");
+        return; // end after successful Supabase path
+      } catch (err: any) {
+        // If Supabase rejects, fall through to local legacy login so nobody is blocked
       }
     }
-  };
+  
+    // === Legacy local fallback (StackBlitz preview / old demo accounts) ===
+    try {
+      const users = loadLS<User[]>(LS_USERS, []);
+      const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
+      const u =
+        users.find(
+          (x) =>
+            (x.email || "").toLowerCase() === email ||
+            (x.username || "").toLowerCase() === email ||
+            (x.username || "").toLowerCase() === email.split("@")[0]
+        ) || null;
+  
+      if (!u) return showToast("Invalid credentials.", "error");
+      if ((u.status ?? "Active") === "Inactive") {
+        return showToast("Your account is inactive. Please contact an administrator.", "error");
+      }
+      const storedPw = pwMap[u.username];
+      if (!storedPw || storedPw !== password) return showToast("Invalid credentials.", "error");
+  
+      onLogin({ username: u.username, role: u.role });
+      showToast(`Welcome, ${u.username}!`, "success");
+    } catch {
+      showToast("Invalid credentials.", "error");
+    }
+  };  
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100">
