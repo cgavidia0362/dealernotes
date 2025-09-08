@@ -329,24 +329,64 @@ const LoginView: React.FC<{
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   
-  const handle = (e: React.FormEvent) => {
+  const handle = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Otherwise, check saved users + password map (from invite/reset flow)
-    const users = loadLS<User[]>(LS_USERS, []);
-    const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
-    const u = users.find((x) => x.username === username);
-    if (!u) return showToast("Invalid credentials.", "error");
-
-    // Gate by user status (Inactive users cannot log in)
-    if ((u.status ?? "Active") === "Inactive") {
-      return showToast("Your account is inactive. Please contact an administrator.", "error");
+    // Treat the "Username" box as an email for now
+    const email = username.trim().toLowerCase();
+    if (!email || !password) {
+      showToast("Enter email and password.", "error");
+      return;
     }
 
-    const storedPw = pwMap[username];
-    if (!storedPw || storedPw !== password) return showToast("Invalid credentials.", "error");
-    onLogin({ username: username, role: u.role });
-    showToast(`Welcome, ${username}!`, "success");
+    try {
+      // 1) Try real Supabase login
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+
+      const user = data.user;
+      // Pick a friendly display name:
+      const chosenUsername =
+        (user?.user_metadata?.username as string) ||
+        email.split("@")[0];
+
+      // Success → put them in the app
+      onLogin({ username: chosenUsername, role: "Rep" });
+      showToast(`Welcome, ${chosenUsername}!`, "success");
+    } catch (err: any) {
+      // 2) TEMP fallback to your old local password map so nobody is blocked during cutover
+      try {
+        const users = loadLS<User[]>(LS_USERS, []);
+        const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
+        const u =
+          users.find(
+            (x) =>
+              (x.email || "").toLowerCase() === email ||
+              (x.username || "").toLowerCase() === email ||
+              (x.username || "").toLowerCase() === email.split("@")[0]
+          ) || null;
+
+        if (!u) throw new Error("Invalid credentials.");
+
+        if ((u.status ?? "Active") === "Inactive") {
+          showToast("Your account is inactive. Please contact an administrator.", "error");
+          return;
+        }
+
+        const storedPw = pwMap[u.username];
+        if (storedPw && storedPw === password) {
+          onLogin({ username: u.username, role: u.role });
+          showToast(`Welcome, ${u.username}!`, "success");
+          return;
+        }
+        throw new Error("Invalid credentials.");
+      } catch (fallbackErr: any) {
+        showToast(err?.message || fallbackErr?.message || "Invalid credentials.", "error");
+      }
+    }
   };
 
   return (
