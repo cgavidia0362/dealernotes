@@ -448,6 +448,35 @@ const LoginView: React.FC<{
               autoComplete="current-password"
             />
           </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="text-sm text-blue-400 hover:underline"
+              onClick={async () => {
+                // We treat the "Username" field as the email for now
+                const email = username.trim().toLowerCase();
+                if (!email || !email.includes("@")) {
+                  showToast("Type your email above first.", "error");
+                  return;
+                }
+
+                // In StackBlitz stub this may not exist; guard it
+                const canReset =
+                  typeof (supabase as any)?.auth?.resetPasswordForEmail === "function";
+                if (!canReset) {
+                  showToast("This works on the live site with Supabase keys.", "error");
+                  return;
+                }
+
+                const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
+                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+                if (error) return showToast(error.message, "error");
+                showToast("Password reset email sent.", "success");
+              }}
+            >
+              Forgot password?
+            </button>
+          </div>
           <button className={`w-full ${brand.primary} text-white font-medium rounded-lg px-4 py-2 focus:outline-none focus:ring-2`} type="submit">
             Log In
           </button>
