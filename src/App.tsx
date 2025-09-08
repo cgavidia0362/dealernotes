@@ -2972,7 +2972,8 @@ useEffect(() => {
             const existing = byUsername.get(key);
 
             if (existing) {
-              // Update role/status/email on existing user
+// NEW: carry over the real Supabase UUID so saves can target the row
+if ((p as any).id) (existing as any).id = (p as any).id as string;
               existing.email = pEmail || existing.email;
               existing.role = ((p as any).role || existing.role) as Role;
               existing.status = ((p as any).status || existing.status) as UserStatus;
@@ -3655,43 +3656,66 @@ useEffect(() => {
     }
     const usernameTaken = users.some((u) => u.username === draft.username && u.id !== draft.id);
     if (usernameTaken) return showToast("Username already exists.", "error");
-
+  
     // status from the radio (stored in statusMap) or the draft, default Active
     const chosenStatus: UserStatus =
       (statusMap[draft.username] as UserStatus) ||
       ((draft as any).status as UserStatus) ||
       "Active";
-
-    // Helpful: if the Email field is empty but Username is an email, use that
+  
+    // If Email field is empty but the username is an email, use that
     const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim();
-
+  
     if (editingId) {
       // 1) Update local list immediately so the UI reflects the change
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft, status: chosenStatus } : u)));
       setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
       setUserModalOpen(false);
-
-      // 2) If this user came from Supabase (has a real auth UUID), persist to profiles
+  
+      // 2) Try to persist to Supabase (only if we know who they are there)
+      //    a) If we have a real UUID, update by id
+      //    b) Otherwise (or if that fails), fall back to update by email
       const isUUID = /^[0-9a-fA-F-]{36}$/.test(editingId);
-      if (isUUID && emailForProfile) {
+  
+      if (emailForProfile) {
         try {
-          const { error } = await supabase
-            .from("profiles")
-            .update({
-              username: draft.username,
-              email: emailForProfile,
-              role: draft.role,
-              status: chosenStatus,
-            })
-            .eq("id", editingId);
-          if (error) throw error;
+          let needEmailFallback = !isUUID;
+  
+          if (isUUID) {
+            const { error: e1 } = await supabase
+              .from("profiles")
+              .update({
+                username: draft.username,
+                email: emailForProfile,
+                role: draft.role,
+                status: chosenStatus,
+              })
+              .eq("id", editingId);
+            if (e1) {
+              // e.g., id wasn’t actually a real profiles id
+              needEmailFallback = true;
+            }
+          }
+  
+          if (needEmailFallback) {
+            const { error: e2 } = await supabase
+              .from("profiles")
+              .update({
+                username: draft.username,
+                role: draft.role,
+                status: chosenStatus,
+              })
+              .eq("email", emailForProfile);
+            if (e2) throw e2;
+          }
+  
           showToast("Saved to Supabase.", "success");
         } catch (err: any) {
           showToast(err?.message || "Saved locally, but failed to save to Supabase.", "error");
         }
       } else {
-        // Local-only user (no auth id yet) — invite flow will create their profiles row
-        showToast("Saved locally. Generate an invite to create this user in Supabase.", "success");
+        // No email → can’t match a Supabase row yet
+        showToast("Saved locally. Add an email or send an invite to sync with Supabase.", "success");
       }
     } else {
       // New local user (not in Supabase yet)
@@ -3699,9 +3723,9 @@ useEffect(() => {
       setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
       setUserModalOpen(false);
       showToast("User added.", "success");
-      // No Supabase write here — /api/generate-invite will upsert the profiles row.
+      // No Supabase write here — your /api/generate-invite will create their profiles row.
     }
-  };
+  };  
 
   // ---- NEW: Remove confirmation modal ----
   const [confirmRemove, setConfirmRemove] = useState<User | null>(null);
