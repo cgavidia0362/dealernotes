@@ -3029,6 +3029,54 @@ if ((p as any).id) (existing as any).id = (p as any).id as string;
       }
     })();
   }, [session]); // runs after login; refresh page to re-sync
+    // === Step 4B: Load dealers from Supabase after login (shared across devices) ===
+    useEffect(() => {
+      if (!session) return;
+  
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from("dealers")
+            .select(
+              "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
+            );
+  
+          if (error) throw error;
+  
+          const fromDb: Dealer[] = (data || []).map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            state: r.state,
+            region: r.region,
+            type: r.type,
+            status: r.status,
+            address1: r.address1 || "",
+            address2: r.address2 || "",
+            city: r.city || "",
+            zip: r.zip || "",
+            contacts: Array.isArray(r.contacts) ? r.contacts : [],
+            assignedRepUsername: r.assigned_rep_username || undefined,
+            lastVisited: r.last_visited ? String(r.last_visited) : undefined, // keep YYYY-MM-DD
+            sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
+            noDealReasons: r.no_deal_reasons || undefined,
+          }));
+  
+          // Replace local dealers with the shared list
+          setDealers(fromDb);
+  
+          // Rebuild regions catalog from DB (state -> unique regions)
+          const rebuilt: RegionsCatalog = {};
+          for (const d of fromDb) {
+            if (!rebuilt[d.state]) rebuilt[d.state] = [];
+            if (!rebuilt[d.state].includes(d.region)) rebuilt[d.state].push(d.region);
+          }
+          for (const st of Object.keys(rebuilt)) rebuilt[st].sort();
+          setRegions(rebuilt);
+        } catch (err) {
+          console.debug("[dealers] load failed", err);
+        }
+      })();
+    }, [session]);  
   const handleClickTask = (t: Task) => {
     saveLS(LS_LAST_SELECTED_DEALER, t.dealerId);
     setRoute("dealer-notes");
