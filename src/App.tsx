@@ -1726,47 +1726,97 @@ const saveName = () => {
   const [noteText, setNoteText] = useState("");
 
   const canUseManagerNote = isAdminManager;
+// Load notes for this dealer from Supabase whenever the dealer changes
+useEffect(() => {
+  (async () => {
+    const { data, error } = await supabase
+      .from('dealer_notes')
+      .select('id,dealer_id,author_username,created_at,category,text')
+      .eq('dealer_id', dealer.id)
+      .order('created_at', { ascending: false });
 
-  const addNote = () => {
-    if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
-    if (!noteText.trim()) return showToast("Please enter a note.", "error");
-
-    if (noteCategory === "Manager" && !canUseManagerNote) {
-      return showToast("Only Managers/Admins can add Manager Notes.", "error");
+    if (error) {
+      console.error(error);
+      return;
     }
 
-    const n: Note = {
-      id: uid(),
-      dealerId: dealer.id,
-      authorUsername: session!.username,
-      tsISO: new Date().toISOString(),
-      category: noteCategory,
-      text: noteText.trim(),
-    };
-    setNotes((prev) => [n, ...prev]);
-    setNoteText("");
+    // Convert DB rows → our Note shape
+    const mapped: Note[] = (data || []).map((r: any) => ({
+      id: String(r.id),
+      dealerId: r.dealer_id,
+      authorUsername: r.author_username,
+      tsISO: new Date(r.created_at).toISOString(),
+      category: r.category,
+      text: r.text,
+    }));
 
-    if (noteCategory === "Visit") {
-      updateDealer({ lastVisited: todayISO() });
-    }
+    // Replace any existing notes for THIS dealer with the fresh list
+    setNotes(prev => {
+      const others = prev.filter(n => n.dealerId !== dealer.id);
+      return [...others, ...mapped];
+    });
+  })();
+}, [dealer.id]);
+const addNote = async () => {
+  if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
+  if (!noteText.trim()) return showToast("Please enter a note.", "error");
+  if (noteCategory === "Manager" && !canUseManagerNote) {
+    return showToast("Only Managers/Admins can add Manager Notes.", "error");
+  }
 
-    if (noteCategory === "Manager") {
-      const repUser = dealer.assignedRepUsername;
-      if (repUser) {
-        const t: Task = {
-          id: uid(),
-          dealerId: dealer.id,
-          repUsername: repUser,
-          text: dealer.name,
-          createdAtISO: new Date().toISOString(),
-        };
-        setTasks((prev) => [t, ...prev]);
-        showToast("Task created for the assigned rep.", "success");
-      }
-    }
-
-    showToast("Note added.", "success");
+  // 1) Write to Supabase
+  const payload = {
+    dealer_id: dealer.id,
+    author_username: session!.username,
+    category: noteCategory,
+    text: noteText.trim(),
   };
+  const { data, error } = await supabase
+    .from('dealer_notes')
+    .insert(payload)
+    .select('id,dealer_id,author_username,created_at,category,text')
+    .single();
+
+  if (error) {
+    return showToast(error.message || "Failed to add note.", "error");
+  }
+
+  // 2) Update local state with the inserted row
+  const row: any = data;
+  const newNote: Note = {
+    id: String(row.id),
+    dealerId: row.dealer_id,
+    authorUsername: row.author_username,
+    tsISO: new Date(row.created_at).toISOString(),
+    category: row.category,
+    text: row.text,
+  };
+  setNotes((prev) => [newNote, ...prev]);
+  setNoteText("");
+
+  // 3) If it's a Visit note, also bump the dealer's lastVisited (your existing logic)
+  if (noteCategory === "Visit") {
+    updateDealer({ lastVisited: todayISO() });
+  }
+
+  // 4) If it's a Manager note, keep creating the local task (same behavior as before)
+  if (noteCategory === "Manager") {
+    const repUser = dealer.assignedRepUsername;
+    if (repUser) {
+      const t: Task = {
+        id: uid(),
+        dealerId: dealer.id,
+        repUsername: repUser,
+        text: dealer.name,
+        createdAtISO: new Date().toISOString(),
+      };
+      setTasks((prev) => [t, ...prev]);
+      showToast("Task created for the assigned rep.", "success");
+    }
+  }
+
+  showToast("Note added.", "success");
+};
 
   // Helper: check if there is an incomplete task tied to this dealer for the current rep
   const myOpenTaskForDealer = useMemo(() => {
