@@ -1569,9 +1569,43 @@ const DealerNotesView: React.FC<{
   const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
 
   /* -------------------------- Status / Details ------------------------- */
-  const updateDealer = (patch: Partial<Dealer>) => {
+  const updateDealer = async (patch: Partial<Dealer>) => {
+    // 1) Optimistic UI: update the on-screen dealer immediately
     setDealers((prev) => prev.map((d) => (d.id === dealer.id ? { ...d, ...patch } : d)));
-  };
+  
+    // 2) Only write to Supabase if this dealer has a real UUID
+    const isUUID = /^[0-9a-fA-F-]{36}$/.test(dealer.id);
+    if (!isUUID) {
+      showToast("This dealer isn't synced yet. Add new dealers to sync with Supabase.", "error");
+      return;
+    }
+  
+    // 3) Map our patch keys to DB column names
+    const dbPatch: any = {};
+    if ("name" in patch) dbPatch.name = patch.name;
+    if ("state" in patch) dbPatch.state = patch.state;
+    if ("region" in patch) dbPatch.region = patch.region;
+    if ("type" in patch) dbPatch.type = patch.type;
+    if ("status" in patch) dbPatch.status = patch.status;
+    if ("address1" in patch) dbPatch.address1 = patch.address1 ?? null;
+    if ("address2" in patch) dbPatch.address2 = patch.address2 ?? null;
+    if ("city" in patch) dbPatch.city = patch.city ?? null;
+    if ("zip" in patch) dbPatch.zip = patch.zip ?? null;
+    if ("contacts" in patch) dbPatch.contacts = patch.contacts ?? [];
+    if ("assignedRepUsername" in patch)
+      dbPatch.assigned_rep_username = patch.assignedRepUsername || null;
+    if ("lastVisited" in patch) dbPatch.last_visited = patch.lastVisited || null;
+    if ("sendingDeals" in patch) dbPatch.sending_deals = patch.sendingDeals ?? null;
+    if ("noDealReasons" in patch) dbPatch.no_deal_reasons = patch.noDealReasons ?? null;
+  
+    // 4) Persist to Supabase
+    try {
+      const { error } = await supabase.from("dealers").update(dbPatch).eq("id", dealer.id);
+      if (error) throw error;
+    } catch (e: any) {
+      showToast(e?.message || "Saved locally, but failed to save dealer to Supabase.", "error");
+    }
+  };  
 
   const [editDetails, setEditDetails] = useState<Dealer>({
     ...dealer,
