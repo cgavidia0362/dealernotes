@@ -3088,6 +3088,104 @@ useEffect(() => {
 }, [showForceReset, users]);
 
 // --- end top-level detection ---
+// === Step 5B: Load rep coverage from Supabase after login ===
+useEffect(() => {
+  // If nobody is logged in yet, do nothing
+  if (!session) return;
+
+  (async () => {
+    try {
+      // 1) Load basic user profiles
+      const { data: profiles, error: pErr } = await supabase
+        .from('profiles')
+        .select('id, username, email, name, role, status, phone')
+        .order('name', { ascending: true });
+
+      if (pErr) throw pErr;
+
+      // 2) Load coverage rows: one row per (username, state, region?)
+      //    If region is NULL, it means "all regions in that state".
+      const { data: coverage, error: cErr } = await supabase
+        .from('rep_coverage')
+        .select('username, state, region');
+
+      if (cErr) throw cErr;
+
+      // 3) Build states[] and regionsByState{} for each user
+      //    We'll collect coverage into maps first, then turn into arrays.
+      const covByUser = new Map<
+        string,
+        { states: Set<string>; map: Record<string, Set<string>> }
+      >();
+
+      for (const row of coverage || []) {
+        const u = (row as any).username as string;
+        const st = (row as any).state as string;
+        const rg = ((row as any).region as string | null) ?? null;
+
+        if (!u || !st) continue;
+
+        if (!covByUser.has(u)) {
+          covByUser.set(u, { states: new Set<string>(), map: {} });
+        }
+        const entry = covByUser.get(u)!;
+        entry.states.add(st);
+
+        // NULL region = "all regions in that state"
+        if (rg == null || rg === '') {
+          entry.map[st] = new Set<string>(regions[st] || []);
+        } else {
+          if (!entry.map[st]) entry.map[st] = new Set<string>();
+          entry.map[st]!.add(rg);
+        }
+      }
+
+      // 4) Merge profiles + coverage into your app's User[] shape
+      const mergedUsers: User[] = (profiles || []).map((p: any) => {
+        const cv =
+          covByUser.get(p.username) ||
+          ({ states: new Set<string>(), map: {} } as {
+            states: Set<string>;
+            map: Record<string, Set<string>>;
+          });
+
+        const statesArr = Array.from(cv.states).sort();
+        const rbs: Record<string, string[]> = {};
+        for (const st of Object.keys(cv.map)) {
+          rbs[st] = Array.from(cv.map[st]).sort();
+        }
+
+        return {
+          id: String(p.id),
+          username: String(p.username),
+          name: String(p.name || p.username || ''),
+          email: p.email || undefined,
+          role: (p.role || 'Rep') as Role,
+          states: statesArr,
+          regionsByState: rbs,
+          phone: p.phone || undefined,
+          status: (p.status || 'Active') as UserStatus,
+        } as User;
+      });
+
+      setUsers(mergedUsers);
+
+      // 5) Keep the status radio buttons in sync with Supabase
+      setStatusMap((prev) => {
+        const next = { ...prev };
+        for (const u of mergedUsers) {
+          next[u.username] = (u.status as UserStatus) ?? 'Active';
+        }
+        return next;
+      });
+
+      console.debug('[5B] Loaded profiles + coverage', { mergedUsers, coverage });
+    } catch (e: any) {
+      console.error('[5B] load coverage failed', e);
+      showToast(e?.message || 'Failed to load rep coverage', 'error');
+    }
+  })();
+}, [session, regions]);
 
   const can = useMemo(() => {
     const role = session?.role;
