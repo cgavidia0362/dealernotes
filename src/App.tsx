@@ -1760,60 +1760,39 @@ useEffect(() => {
 const addNote = async () => {
   if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
   if (!noteText.trim()) return showToast("Please enter a note.", "error");
-  if (noteCategory === "Manager" && !canUseManagerNote) {
-    return showToast("Only Managers/Admins can add Manager Notes.", "error");
-  }
+ // When Managers/Admins add a "Manager" note, also create a Task for the assigned Rep
+if (noteCategory === "Manager" && canUseManagerNote) {
+  const repUser = dealer.assignedRepUsername || session!.username;
+  if (repUser) {
+    const t: Task = {
+      id: uid(),
+      dealerId: dealer.id,
+      repUsername: repUser,
+      text: dealer.name,
+      createdAtISO: new Date().toISOString(),
+    };
 
-  // 1) Write to Supabase
-  const payload = {
-    dealer_id: dealer.id,
-    author_username: session!.username,
-    category: noteCategory,
-    text: noteText.trim(),
-  };
-  const { data, error } = await supabase
-    .from('dealer_notes')
-    .insert(payload)
-    .select('id,dealer_id,author_username,created_at,category,text')
-    .single();
+    // Optimistic UI
+    setTasks((prev) => [t, ...prev]);
 
-  if (error) {
-    return showToast(error.message || "Failed to add note.", "error");
-  }
+    // Persist in Supabase
+    const { error } = await supabase.from("dealer_tasks").insert({
+      id: t.id,
+      dealer_id: t.dealerId,
+      rep_username: t.repUsername,
+      text: t.text,
+      created_at: t.createdAtISO,
+    });
 
-  // 2) Update local state with the inserted row
-  const row: any = data;
-  const newNote: Note = {
-    id: String(row.id),
-    dealerId: row.dealer_id,
-    authorUsername: row.author_username,
-    tsISO: new Date(row.created_at).toISOString(),
-    category: row.category,
-    text: row.text,
-  };
-  setNotes((prev) => [newNote, ...prev]);
-  setNoteText("");
-
-  // 3) If it's a Visit note, also bump the dealer's lastVisited (your existing logic)
-  if (noteCategory === "Visit") {
-    updateDealer({ lastVisited: todayISO() });
-  }
-
-  // 4) If it's a Manager note, keep creating the local task (same behavior as before)
-  if (noteCategory === "Manager") {
-    const repUser = dealer.assignedRepUsername;
-    if (repUser) {
-      const t: Task = {
-        id: uid(),
-        dealerId: dealer.id,
-        repUsername: repUser,
-        text: dealer.name,
-        createdAtISO: new Date().toISOString(),
-      };
-      setTasks((prev) => [t, ...prev]);
-      showToast("Task created for the assigned rep.", "success");
+    if (error) {
+      // roll back optimistic add if DB failed
+      setTasks((prev) => prev.filter((x) => x.id !== t.id));
+      showToast(error.message || "Could not create task", "error");
+    } else {
+      showToast("Task created for the rep.", "success");
     }
   }
+}
 
   showToast("Note added.", "success");
 };
@@ -1824,16 +1803,30 @@ const addNote = async () => {
     return tasks.find((t) => t.dealerId === dealer.id && t.repUsername === session?.username && !t.completedAtISO) || null;
   }, [tasks, dealer.id, isRep, session]);
 
-  const completeMyTask = () => {
+  const completeMyTask = async () => {
     if (!myOpenTaskForDealer) return;
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === myOpenTaskForDealer.id ? { ...t, completedAtISO: new Date().toISOString() } : t
-      )
+    const when = new Date().toISOString();
+  
+    // Optimistic UI
+    setTasks(prev =>
+      prev.map(t => t.id === myOpenTaskForDealer.id ? { ...t, completedAtISO: when } : t)
     );
-    showToast("Task completed.", "success");
-  };
-
+  
+    const { error } = await supabase
+      .from('dealer_tasks')
+      .update({ completed_at: when })
+      .eq('id', myOpenTaskForDealer.id);
+  
+    if (error) {
+      // roll back if DB failed
+      setTasks(prev =>
+        prev.map(t => t.id === myOpenTaskForDealer.id ? { ...t, completedAtISO: undefined } : t)
+      );
+      showToast(error.message || 'Could not complete task', 'error');
+    } else {
+      showToast('Task completed.', 'success');
+    }
+  };  
   /* ------------------------------ Delete -------------------------------- */
  // Delete from Supabase first (if this has a real DB id), then clean up locally
 const doDeleteDealer = async () => {
@@ -3171,6 +3164,39 @@ if ((p as any).id) (existing as any).id = (p as any).id as string;
       }
     })();
   }, [session]); // runs after login; refresh page to re-sync
+  // === Step 4G: Load tasks from Supabase ===
+useEffect(() => {
+  if (!session) return;
+
+  const isAdminManager = session.role === 'Admin' || session.role === 'Manager';
+
+  (async () => {
+    const base = supabase
+      .from('dealer_tasks')
+      .select('id,dealer_id,rep_username,text,created_at,completed_at')
+      .order('created_at', { ascending: false });
+
+    const { data, error } = isAdminManager
+      ? await base
+      : await base.eq('rep_username', session.username);
+
+    if (error) {
+      showToast(error.message || 'Failed to load tasks', 'error');
+      return;
+    }
+
+    setTasks(
+      (data || []).map((r: any) => ({
+        id: r.id,
+        dealerId: r.dealer_id,
+        repUsername: r.rep_username,
+        text: r.text,
+        createdAtISO: r.created_at,
+        completedAtISO: r.completed_at || undefined,
+      }))
+    );
+  })();
+}, [session]);
     // === Step 4B: Load dealers from Supabase after login (shared across devices) ===
     useEffect(() => {
       if (!session) return;
@@ -4196,13 +4222,100 @@ const copyInvite = async () => {
     downloadCSV("all_notes.csv", rows);
   };
 // ---------- Import Dealers (stub so build passes) ----------
+// Import Dealers (CSV) -> upsert into Supabase 'dealers'
 const handleImportDealers = async (file?: File | null) => {
-  if (!file) {
-    showToast("No file selected.", "error");
-    return;
+  try {
+    if (!file) {
+      showToast("Please choose a CSV file.", "error");
+      return;
+    }
+
+    // Read the file
+    const text = await file.text();
+
+    // Simple CSV parse (expects header row):
+    // Dealer,Address1,City,State,Zip Code,Type,Status,Region
+    const rows = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const header = rows.shift() || "";
+    const cols = header.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+
+    const idx = (name: string) =>
+      cols.findIndex((c) => c.toLowerCase() === name.toLowerCase());
+
+    const iDealer = idx("Dealer");
+    const iState = idx("State");
+    const iRegion = idx("Region");
+    const iType = idx("Type");
+    const iStatus = idx("Status");
+
+    if (iDealer < 0 || iState < 0) {
+      showToast("CSV must include at least Dealer and State columns.", "error");
+      return;
+    }
+
+    const payload = rows
+      .map((line) => {
+        const parts = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+        const name = parts[iDealer] || "";
+        const state = (parts[iState] || "").toUpperCase();
+        const region = parts[iRegion] || "";
+        const type = parts[iType] || "Independent";
+        const status = parts[iStatus] || "Active";
+        return { name, state, region, type, status };
+      })
+      .filter((r) => r.name && r.state);
+
+    if (payload.length === 0) {
+      showToast("No valid rows found.", "error");
+      return;
+    }
+
+    // Upsert into Supabase (dedupe on name+state; see SQL note below)
+    const { error } = await supabase
+      .from("dealers")
+      .upsert(payload, { onConflict: "name,state", ignoreDuplicates: false });
+
+    if (error) throw error;
+
+    // Refresh local list from Supabase (so UI shows the latest)
+    const { data, error: selErr } = await supabase
+      .from("dealers")
+      .select(
+        "id,name,state,region,type,status,address1,address2,city,zip,contacts,assigned_rep_username,last_visited,sending_deals,no_deal_reasons"
+      )
+      .order("name");
+
+    if (selErr) throw selErr;
+
+    const fromDb: Dealer[] = (data || []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      state: r.state,
+      region: r.region,
+      type: r.type,
+      status: r.status,
+      address1: r.address1 || "",
+      address2: r.address2 || "",
+      city: r.city || "",
+      zip: r.zip || "",
+      contacts: Array.isArray(r.contacts) ? r.contacts : [],
+      assignedRepUsername: r.assigned_rep_username || undefined,
+      lastVisited: r.last_visited ? String(r.last_visited) : undefined,
+      sendingDeals:
+        typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
+      noDealReasons: r.no_deal_reasons || undefined,
+    }));
+
+    setDealers(fromDb);
+    showToast(`Imported ${payload.length} dealer(s).`, "success");
+    setImportDealersOpen(false);
+  } catch (e: any) {
+    showToast(e?.message || "Import failed", "error");
   }
-  // Minimal stub for now; wire up real CSV parsing later.
-  showToast("Import not implemented yet in this build.", "error");
 };
   return (
     <div className="space-y-4">
