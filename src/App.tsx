@@ -4239,6 +4239,25 @@ const handleImportDealers = async (file?: File | null) => {
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
+// Helpers to normalize CSV values so they pass database checks
+const normType = (s: string) => {
+  const v = (s || "").trim().toLowerCase();
+  if (v.startsWith("fran")) return "Franchise";
+  return "Independent"; // default
+};
+
+const normStatus = (s: string) => {
+  const v = (s || "").trim().toLowerCase();
+  if (!v) return "Active";
+  if (["active", "a"].includes(v)) return "Active";
+  if (["pending", "pend"].includes(v)) return "Pending";
+  if (["prospect", "prospective", "new", "lead"].includes(v)) return "Prospect";
+  if (["inactive", "in-active", "disabled"].includes(v)) return "Inactive";
+  if (
+    ["blacklisted", "black list", "black-list", "black listed", "blacklist", "blocked"].includes(v)
+  ) return "Black Listed";
+  return "Active"; // safe fallback
+};
 
     const header = rows.shift() || "";
     const cols = header.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
@@ -4260,11 +4279,11 @@ const handleImportDealers = async (file?: File | null) => {
     const payload = rows
       .map((line) => {
         const parts = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-        const name = parts[iDealer] || "";
-        const state = (parts[iState] || "").toUpperCase();
-        const region = parts[iRegion] || "";
-        const type = parts[iType] || "Independent";
-        const status = parts[iStatus] || "Active";
+        const name   = (parts[iDealer] || "").trim();
+        const state  = (parts[iState]  || "").trim().toUpperCase();
+        const region = (parts[iRegion] || "").trim();
+        const type   = normType(parts[iType]   || "");
+        const status = normStatus(parts[iStatus] || "");        
         return { name, state, region, type, status };
       })
       .filter((r) => r.name && r.state);
