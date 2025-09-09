@@ -1785,17 +1785,34 @@ const saveName = () => {
   };
 
   /* ------------------------------ Delete -------------------------------- */
-  const doDeleteDealer = () => {
-    if (!(isAdminManager || repCanAccess)) return showToast("You don't have permission to delete this dealer.", "error");
-    if (confirmText !== dealer.name) return showToast("Type the dealer name exactly to confirm.", "error");
+ // Delete from Supabase first (if this has a real DB id), then clean up locally
+const doDeleteDealer = async () => {
+  if (!(isAdminManager || repCanAccess))
+    return showToast("You don't have permission to delete this dealer.", "error");
+  if (confirmText !== dealer.name)
+    return showToast("Type the dealer name exactly to confirm.", "error");
 
-    setDealers((prev) => prev.filter((d) => d.id !== dealer.id));
-    setTasks((prev) => prev.filter((t) => t.dealerId !== dealer.id));
-    setNotes((prev) => prev.filter((n) => n.dealerId !== dealer.id));
-    showToast(`Dealer "${dealer.name}" deleted.`, "success");
-    setDeleteOpen(false);
-    setRoute("dealer-search");
-  };
+  // Try server delete when this dealer has a Supabase UUID
+  const isUUID = /^[0-9a-fA-F-]{36}$/.test(dealer.id);
+  if (isUUID) {
+    try {
+      const { error } = await supabase.from("dealers").delete().eq("id", dealer.id);
+      if (error) throw error;
+    } catch (e: any) {
+      // We still remove locally so UI is consistent, but let the user know
+      showToast(e?.message || "Removed locally, but failed to delete in Supabase.", "error");
+    }
+  }
+
+  // Local clean-up so the screen updates immediately
+  setDealers((prev) => prev.filter((d) => d.id !== dealer.id));
+  setTasks((prev) => prev.filter((t) => t.dealerId !== dealer.id));
+  setNotes((prev) => prev.filter((n) => n.dealerId !== dealer.id));
+
+  showToast(`Dealer "${dealer.name}" deleted.`, "success");
+  setDeleteOpen(false);
+  setRoute("dealer-search");
+};
 
   /* --------------------------------- UI --------------------------------- */
   const repList = users.filter((u) => u.role === "Rep");
