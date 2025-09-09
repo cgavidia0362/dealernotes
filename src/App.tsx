@@ -3102,12 +3102,15 @@ useEffect(() => {
         .order('name', { ascending: true });
 
       if (pErr) throw pErr;
-
+      const idToUsername = new Map<string, string>();
+      for (const p of (profiles || []) as any[]) {
+        idToUsername.set(String(p.id), String(p.username));
+      }      
       // 2) Load coverage rows: one row per (username, state, region?)
       //    If region is NULL, it means "all regions in that state".
       const { data: coverage, error: cErr } = await supabase
-        .from('rep_coverage')
-        .select('username, state, region');
+      .from('rep_coverage')
+      .select('user_id, state, region');    
 
       if (cErr) throw cErr;
 
@@ -3119,7 +3122,7 @@ useEffect(() => {
       >();
 
       for (const row of coverage || []) {
-        const u = (row as any).username as string;
+        const u = idToUsername.get(String((row as any).user_id)) || '';
         const st = (row as any).state as string;
         const rg = ((row as any).region as string | null) ?? null;
 
@@ -3171,14 +3174,6 @@ useEffect(() => {
       setUsers(mergedUsers);
 
       // 5) Keep the status radio buttons in sync with Supabase
-      setStatusMap((prev) => {
-        const next = { ...prev };
-        for (const u of mergedUsers) {
-          next[u.username] = (u.status as UserStatus) ?? 'Active';
-        }
-        return next;
-      });
-
       console.debug('[5B] Loaded profiles + coverage', { mergedUsers, coverage });
     } catch (e: any) {
       console.error('[5B] load coverage failed', e);
@@ -3992,84 +3987,98 @@ useEffect(() => {
     });
   };
 
-  const saveUser = async () => {
-    if (!draft.name.trim() || !draft.username.trim()) {
-      showToast("Name and username are required.", "error");
-      return;
-    }
-    const usernameTaken = users.some((u) => u.username === draft.username && u.id !== draft.id);
-    if (usernameTaken) return showToast("Username already exists.", "error");
-  
-    // status from the radio (stored in statusMap) or the draft, default Active
-    const chosenStatus: UserStatus =
-      (statusMap[draft.username] as UserStatus) ||
-      ((draft as any).status as UserStatus) ||
-      "Active";
-  
-    // If Email field is empty but the username is an email, use that
-    const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim();
-  
-    if (editingId) {
-      // 1) Update local list immediately so the UI reflects the change
-      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft, status: chosenStatus } : u)));
-      setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
-      setUserModalOpen(false);
-  
-      // 2) Try to persist to Supabase (only if we know who they are there)
-      //    a) If we have a real UUID, update by id
-      //    b) Otherwise (or if that fails), fall back to update by email
-      const isUUID = /^[0-9a-fA-F-]{36}$/.test(editingId);
-  
-      if (emailForProfile) {
-        try {
-          let needEmailFallback = !isUUID;
-  
-          if (isUUID) {
-            const { error: e1 } = await supabase
-              .from("profiles")
-              .update({
-                username: draft.username,
-                email: emailForProfile,
-                role: draft.role,
-                status: chosenStatus,
-              })
-              .eq("id", editingId);
-            if (e1) {
-              // e.g., id wasn’t actually a real profiles id
-              needEmailFallback = true;
-            }
-          }
-  
-          if (needEmailFallback) {
-            const { error: e2 } = await supabase
-              .from("profiles")
-              .update({
-                username: draft.username,
-                role: draft.role,
-                status: chosenStatus,
-              })
-              .eq("email", emailForProfile);
-            if (e2) throw e2;
-          }
-  
-          showToast("Saved to Supabase.", "success");
-        } catch (err: any) {
-          showToast(err?.message || "Saved locally, but failed to save to Supabase.", "error");
-        }
-      } else {
-        // No email → can’t match a Supabase row yet
-        showToast("Saved locally. Add an email or send an invite to sync with Supabase.", "success");
-      }
-    } else {
-      // New local user (not in Supabase yet)
-      setUsers((prev) => [{ ...draft, status: chosenStatus }, ...prev]);
-      setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
-      setUserModalOpen(false);
-      showToast("User added.", "success");
-      // No Supabase write here — your /api/generate-invite will create their profiles row.
-    }
-  };  
+ // REPLACE the entire saveUser function with this
+const saveUser = async () => {
+  // 0) Basic validation
+  if (!draft.name.trim() || !draft.username.trim()) {
+    return showToast("Name and username are required.", "error");
+  }
+  const usernameTaken = users.some((u) => u.username === draft.username && u.id !== draft.id);
+  if (usernameTaken) return showToast("Username already exists.", "error");
 
+  // Status from the radios (statusMap) or draft, default Active
+  const chosenStatus: UserStatus =
+    (statusMap[draft.username] as UserStatus) ||
+    ((draft as any).status as UserStatus) ||
+    "Active";
+
+  // If Email is empty and username is an email, use it
+  const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim();
+
+  // 1) Update the on-screen list immediately so UI reflects the change
+  if (editingId) {
+    setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft, status: chosenStatus } : u)));
+    setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
+    setUserModalOpen(false);
+  } else {
+    setUsers((prev) => [{ ...draft, status: chosenStatus }, ...prev]);
+    setStatusMap((m) => ({ ...m, [draft.username]: "Inactive" }));
+    setUserModalOpen(false);
+  }
+
+  // 2) Persist to Supabase
+  try {
+    const isUUID = /^[0-9a-fA-F-]{36}$/.test(editingId || "");
+    let targetUserId: string | null = isUUID ? editingId! : null;
+
+    // 2a) Update basic profile fields (username/email/role/status)
+    if (emailForProfile) {
+      if (isUUID) {
+        const { error } = await supabase
+          .from("profiles")
+          .update({
+            username: draft.username,
+            email: emailForProfile || null,
+            role: draft.role,
+            status: chosenStatus,
+          })
+          .eq("id", editingId);
+        if (error) throw error;
+      } else {
+        // Fallback: update by email and learn their id
+        const { data, error } = await supabase
+          .from("profiles")
+          .update({
+            username: draft.username,
+            email: emailForProfile || null,
+            role: draft.role,
+            status: chosenStatus,
+          })
+          .eq("email", emailForProfile)
+          .select("id")
+          .single();
+        if (error) throw error;
+        targetUserId = (data as any)?.id ?? null;
+      }
+    }
+
+    // 2b) Save Rep coverage (state+region) if we know their real user id
+    if (targetUserId) {
+      // Remove old coverage rows
+      const { error: delErr } = await supabase.from("rep_coverage").delete().eq("user_id", targetUserId);
+      if (delErr) throw delErr;
+
+      // Build rows from the modal selections
+      const rows: { user_id: string; state: string; region: string }[] = [];
+      for (const st of draft.states || []) {
+        const rgs = draft.regionsByState?.[st] || [];
+        for (const rg of rgs) {
+          rows.push({ user_id: targetUserId, state: st, region: rg });
+        }
+      }
+
+      if (rows.length) {
+        const { error: upErr } = await supabase
+          .from("rep_coverage")
+          .upsert(rows, { onConflict: "user_id,state,region" });
+        if (upErr) throw upErr;
+      }
+    }
+  } catch (err: any) {
+    console.error(err);
+    showToast(err?.message || "Failed to save to server.", "error");
+  }
+};
   // ---- NEW: Remove confirmation modal ----
   const [confirmRemove, setConfirmRemove] = useState<User | null>(null);
 
