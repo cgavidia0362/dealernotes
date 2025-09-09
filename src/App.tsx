@@ -4703,61 +4703,112 @@ const normStatus = (s: string) => {
             />
             <TextField label="Phone" value={draft.phone || ""} onChange={(v) => setDraft((d) => ({ ...d, phone: v }))} />
           </div>
-{/* Coverage (States & Regions) */}
-<div className="mt-4">
-  <div className="text-sm font-semibold text-slate-700 mb-2">Coverage (States & Regions)</div>
+{/* Coverage (State → Regions) — compact, two-field UI */}
+{(() => {
+  // Pick which state we’re editing right now:
+  const st =
+    ((draft as any)._activeState as string) ||
+    (draft.states[0] as string | undefined) ||
+    (Object.keys(regions)[0] as string | undefined) ||
+    "";
 
-  <div className="grid md:grid-cols-3 gap-3">
-    {allStates.map((st) => (
-      <div key={st} className="rounded-lg border p-3">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={draft.states.includes(st)}
-            onChange={() => toggleStateForDraft(st)}
-          />
-          <span className="font-medium">{st}</span>
-        </label>
+  // helper for All/None buttons
+  const stateIsSelected = st && draft.states.includes(st);
 
-        <div className="mt-2 flex gap-2 text-xs">
-          <button
-            type="button"
-            className="px-2 py-1 rounded border"
-            onClick={() => selectAllRegionsForState(st)}
-            disabled={!draft.states.includes(st)}
+  return (
+    <div className="mt-4">
+      <div className="text-sm font-semibold text-slate-700 mb-2">
+        Coverage (State → Regions)
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        {/* Left: State */}
+        <div>
+          <label className="text-sm font-medium">State</label>
+          <select
+            className="w-full rounded-lg border p-2 mt-1"
+            value={st}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraft((d) => {
+                const next: any = { ...d, _activeState: v };
+                // ensure the chosen state is tracked
+                if (v && !next.states.includes(v)) {
+                  next.states = [...next.states, v];
+                  if (!next.regionsByState[v]) next.regionsByState[v] = [];
+                }
+                return next;
+              });
+            }}
           >
-            All
-          </button>
-          <button
-            type="button"
-            className="px-2 py-1 rounded border"
-            onClick={() => clearRegionsForState(st)}
-            disabled={!draft.states.includes(st)}
-          >
-            None
-          </button>
+            {Object.keys(regions).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+
+          <div className="mt-2">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={!!st && draft.states.includes(st)}
+                onChange={() => st && toggleStateForDraft(st)}
+              />
+              Assign this entire state
+            </label>
+          </div>
         </div>
 
-        <div className="mt-2 flex flex-wrap gap-2">
-          {(regions[st] || []).map((rg: string) => {
-            const checked = (draft.regionsByState[st] || []).includes(rg);
-            return (
-              <label key={rg} className="inline-flex items-center gap-1 text-sm">
-                <input
-                  type="checkbox"
-                  disabled={!draft.states.includes(st)}
-                  checked={checked}
-                  onChange={() => toggleRegionForDraft(st, rg)}
-                />
-                {rg}
-              </label>
-            );
-          })}
+        {/* Right: Regions for selected state */}
+        <div>
+          <label className="text-sm font-medium">
+            Regions in {st || "—"}
+          </label>
+
+          <div className="mt-2 flex gap-2 text-xs">
+            <button
+              type="button"
+              className="px-2 py-1 rounded border"
+              onClick={() => st && selectAllRegionsForState(st)}
+              disabled={!stateIsSelected}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded border"
+              onClick={() => st && clearRegionsForState(st)}
+              disabled={!stateIsSelected}
+            >
+              None
+            </button>
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-3">
+            {(regions[st] || []).length === 0 && (
+              <div className="text-xs text-slate-500">No regions for this state.</div>
+            )}
+            {(regions[st] || []).map((rg: string) => {
+              const selected = (draft.regionsByState[st] || []).includes(rg);
+              return (
+                <label key={rg} className="inline-flex items-center gap-1 text-sm">
+                  <input
+                    type="checkbox"
+                    disabled={!stateIsSelected}
+                    checked={selected}
+                    onChange={() => toggleRegionForDraft(st, rg)}
+                  />
+                  {rg}
+                </label>
+              );
+            })}
+          </div>
         </div>
       </div>
-    ))}
-  </div>
-</div>
+    </div>
+  );
+})()}
           {/* Invite link row — ONLY visible when editing an existing user */}
           {editingId && (
             <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-end">
