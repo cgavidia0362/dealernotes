@@ -4703,7 +4703,61 @@ const normStatus = (s: string) => {
             />
             <TextField label="Phone" value={draft.phone || ""} onChange={(v) => setDraft((d) => ({ ...d, phone: v }))} />
           </div>
+{/* Coverage (States & Regions) */}
+<div className="mt-4">
+  <div className="text-sm font-semibold text-slate-700 mb-2">Coverage (States & Regions)</div>
 
+  <div className="grid md:grid-cols-3 gap-3">
+    {allStates.map((st) => (
+      <div key={st} className="rounded-lg border p-3">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.states.includes(st)}
+            onChange={() => toggleStateForDraft(st)}
+          />
+          <span className="font-medium">{st}</span>
+        </label>
+
+        <div className="mt-2 flex gap-2 text-xs">
+          <button
+            type="button"
+            className="px-2 py-1 rounded border"
+            onClick={() => selectAllRegionsForState(st)}
+            disabled={!draft.states.includes(st)}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 rounded border"
+            onClick={() => clearRegionsForState(st)}
+            disabled={!draft.states.includes(st)}
+          >
+            None
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(regions[st] || []).map((rg: string) => {
+            const checked = (draft.regionsByState[st] || []).includes(rg);
+            return (
+              <label key={rg} className="inline-flex items-center gap-1 text-sm">
+                <input
+                  type="checkbox"
+                  disabled={!draft.states.includes(st)}
+                  checked={checked}
+                  onChange={() => toggleRegionForDraft(st, rg)}
+                />
+                {rg}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
           {/* Invite link row — ONLY visible when editing an existing user */}
           {editingId && (
             <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-end">
