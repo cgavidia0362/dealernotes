@@ -800,35 +800,76 @@ const paged = useMemo(() => {
     });
   };
 
-  const addDealer = () => {
+  const addDealer = async () => {
     const err = validateForm();
     if (err) return showToast(err, "error");
-
+  
     // If a Rep is adding, force-assign to them
-    const assignedRep = session?.role === "Rep" ? session.username : form.assignedRepUsername || "";
-
+    const assignedRep =
+      session?.role === "Rep" ? session.username : form.assignedRepUsername || "";
+  
+    // keep your regions catalog in sync for filters
     ensureRegionInCatalog(form.state, form.region);
-    const newDealer: Dealer = {
-      id: uid(),
-      name: form.name.trim(),
-      state: form.state,
-      region: form.region,
-      type: form.type,
-      status: form.status,
-      address1: form.address1?.trim() || "",
-      address2: form.address2?.trim() || "",
-      city: form.city?.trim() || "",
-      zip: form.zip?.trim() || "",
-      contacts: form.contacts.filter((c) => c.name || c.phone).map((c) => ({ name: c.name.trim(), phone: c.phone.trim() })),
-      assignedRepUsername: assignedRep || undefined,
-      lastVisited: undefined,
-      sendingDeals: undefined,
-    };
-    setDealers((prev) => [...prev, newDealer]);
-    showToast(`Dealer "${newDealer.name}" added.`, "success");
-    setAddOpen(false);
-    resetForm();
-  };
+  
+    try {
+      // 1) Insert into Supabase (shared DB)
+      const payload = {
+        name: form.name.trim(),
+        state: form.state,
+        region: form.region,
+        type: form.type,         // "Franchise" | "Independent"
+        status: form.status,     // "Active" | "Pending" | "Prospect" | "Inactive" | "Black Listed"
+        address1: form.address1?.trim() || null,
+        address2: form.address2?.trim() || null,
+        city: form.city?.trim() || null,
+        zip: form.zip?.trim() || null,
+        contacts: form.contacts
+          .filter((c) => c.name || c.phone)
+          .map((c) => ({ name: c.name.trim(), phone: c.phone.trim() })),
+        assigned_rep_username: assignedRep || null,
+        last_visited: null,
+        sending_deals: null,
+        no_deal_reasons: null,
+      };
+  
+      const { data, error } = await supabase
+        .from("dealers")
+        .insert([payload])
+        .select(
+          "id,name,state,region,type,status,address1,address2,city,zip,contacts,assigned_rep_username,last_visited,sending_deals,no_deal_reasons"
+        )
+        .single();
+  
+      if (error) throw error;
+  
+      // 2) Reflect the saved row in the UI (using Supabase's UUID id)
+      const row = data as any;
+      const newDealer: Dealer = {
+        id: row.id,
+        name: row.name,
+        state: row.state,
+        region: row.region,
+        type: row.type,
+        status: row.status,
+        address1: row.address1 || "",
+        address2: row.address2 || "",
+        city: row.city || "",
+        zip: row.zip || "",
+        contacts: Array.isArray(row.contacts) ? row.contacts : [],
+        assignedRepUsername: row.assigned_rep_username || undefined,
+        lastVisited: row.last_visited ? String(row.last_visited) : undefined,
+        sendingDeals: typeof row.sending_deals === "boolean" ? row.sending_deals : undefined,
+        noDealReasons: row.no_deal_reasons || undefined,
+      };
+  
+      setDealers((prev) => [newDealer, ...prev]);
+      showToast(`Dealer "${newDealer.name}" added.`, "success");
+      setAddOpen(false);
+      resetForm();
+    } catch (e: any) {
+      showToast(e?.message || "Failed to add dealer.", "error");
+    }
+  };  
 
   const canSeeReporting = can.reporting && (session?.role === "Admin" || session?.role === "Manager");
   const canSeeUserMgmt = can.userMgmt && session?.role === "Admin";
