@@ -4875,6 +4875,8 @@ const confirmImportDealers = async () => {
               <th className="text-left py-2 px-3 font-medium">State</th>
               <th className="text-left py-2 px-3 font-medium">Region</th>
               <th className="text-left py-2 px-3 font-medium">City</th>
+              <th className="text-left py-2 px-3 font-medium">Address</th>
+<th className="text-left py-2 px-3 font-medium">Zip</th>
               <th className="text-left py-2 px-3 font-medium">Type</th>
               <th className="text-left py-2 px-3 font-medium">Status</th>
             </tr>
@@ -4895,18 +4897,22 @@ const confirmImportDealers = async () => {
                       <td className="py-1.5 px-3">{r.state}</td>
                       <td className="py-1.5 px-3">{r.region || '—'}</td>
                       <td className="py-1.5 px-3">{r.city || '—'}</td>
+                      <td className="py-1.5 px-3">
+  {([r.address1, r.address2].filter(Boolean).join(" ") || "—")}
+</td>
+<td className="py-1.5 px-3">{r.zip || "—"}</td>
                       <td className="py-1.5 px-3">{r.type}</td>
                       <td className="py-1.5 px-3">{r.status}</td>
                     </tr>
                   ))}
                   {rows.length > 20 && (
                     <tr className="border-t">
-                      <td colSpan={7} className="py-2 px-3 text-slate-500">…and {rows.length - 20} more row(s)</td>
+                      <td colSpan={9} className="py-2 px-3 text-slate-500">…and {rows.length - 20} more row(s)</td>
                     </tr>
                   )}
                   {rows.length === 0 && (
                     <tr className="border-t">
-                      <td colSpan={7} className="py-2 px-3 text-slate-500">No rows match the current import mode.</td>
+                      <td colSpan={9} className="py-2 px-3 text-slate-500">No rows match the current import mode.</td>
                     </tr>
                   )}
                 </>
