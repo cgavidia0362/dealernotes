@@ -2078,16 +2078,17 @@ const doDeleteDealer = async () => {
 
         {/* Assignment & Sending */}
         <div className="rounded-xl border bg-white p-5 shadow-sm space-y-4">
-          <div>
-            <div className="text-slate-800 font-semibold mb-2">Assigned Rep (override)</div>
-            <SelectField
-              label="Assigned Rep"
-              value={dealer.assignedRepUsername || ""}
-              onChange={(v) => changeAssignedRep(v)}
-              options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
-              disabled={!isAdminManager}
-            />
-          </div>
+        {isAdminManager && (
+  <div>
+    <div className="text-slate-800 font-semibold mb-2">Assigned Rep (override)</div>
+    <SelectField
+      label="Assigned Rep"
+      value={dealer.assignedRepUsername || ""}
+      onChange={(v) => changeAssignedRep(v)}
+      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
+    />
+  </div>
+)}
 
           <div className="border-t pt-4">
             <div className="text-slate-800 font-semibold mb-2">Are they sending deals?</div>
