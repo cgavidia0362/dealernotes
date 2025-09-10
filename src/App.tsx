@@ -3905,6 +3905,19 @@ useEffect(() => {
   const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
   const [importDealersOpen, setImportDealersOpen] = useState(false);
+  // Import preview state
+const [importPreview, setImportPreview] = useState<{
+  fileName: string;
+  rows: {
+    name: string; state: string; region?: string | null; type?: string; status?: string;
+    address1?: string | null; address2?: string | null; city?: string | null; zip?: string | null;
+    _isUpdate?: boolean;
+  }[];
+  issues: { row: number; message: string }[];
+  stats: { total: number; valid: number; invalid: number; willInsert: number; willUpdate: number; duplicateRows: number };
+} | null>(null);
+const [importPreviewOpen, setImportPreviewOpen] = useState(false);
+const [importMode, setImportMode] = useState<'all' | 'new' | 'updates'>('all');
   // Invite state (only for Edit)
   const [inviteToken, setInviteToken] = useState<string>("");
   const inviteUrl = inviteToken
@@ -4328,8 +4341,7 @@ const copyInvite = async () => {
       });
     downloadCSV("all_notes.csv", rows);
   };
-// ---------- Import Dealers (stub so build passes) ----------
-// Import Dealers (CSV) -> upsert into Supabase 'dealers'
+// Import Dealers (CSV) -> PARSE & PREVIEW first, then confirm to upsert
 const handleImportDealers = async (file?: File | null) => {
   try {
     if (!file) {
@@ -4337,82 +4349,231 @@ const handleImportDealers = async (file?: File | null) => {
       return;
     }
 
-    // Read the file
-    const text = await file.text();
+    // Read full file text
+    let text = await file.text();
+    // Remove BOM if present
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
 
-    // Simple CSV parse (expects header row):
-    // Dealer,Address1,City,State,Zip Code,Type,Status,Region
-    const rows = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-// Helpers to normalize CSV values so they pass database checks
-const normType = (s: string) => {
-  const v = (s || "").trim().toLowerCase();
-  if (v.startsWith("fran")) return "Franchise";
-  return "Independent"; // default
-};
+    // --- Minimal RFC-4180 CSV parser (handles quotes and commas) ---
+    const parseCSV = (src: string): string[][] => {
+      const rows: string[][] = [];
+      let row: string[] = [];
+      let field = "";
+      let i = 0;
+      let inQuotes = false;
 
-const normStatus = (s: string) => {
-  const v = (s || "").trim().toLowerCase();
-  if (!v) return "Active";
-  if (["active", "a"].includes(v)) return "Active";
-  if (["pending", "pend"].includes(v)) return "Pending";
-  if (["prospect", "prospective", "new", "lead"].includes(v)) return "Prospect";
-  if (["inactive", "in-active", "disabled"].includes(v)) return "Inactive";
-  if (
-    ["blacklisted", "black list", "black-list", "black listed", "blacklist", "blocked"].includes(v)
-  ) return "Black Listed";
-  return "Active"; // safe fallback
-};
+      while (i < src.length) {
+        const ch = src[i];
 
-    const header = rows.shift() || "";
-    const cols = header.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+        if (inQuotes) {
+          if (ch === '"') {
+            const next = src[i + 1];
+            if (next === '"') {
+              // Escaped quote
+              field += '"';
+              i += 2;
+              continue;
+            } else {
+              inQuotes = false;
+              i += 1;
+              continue;
+            }
+          } else {
+            field += ch;
+            i += 1;
+            continue;
+          }
+        } else {
+          if (ch === '"') { inQuotes = true; i += 1; continue; }
+          if (ch === ',')  { row.push(field); field = ""; i += 1; continue; }
+          if (ch === '\r') { i += 1; continue; }
+          if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; i += 1; continue; }
+          field += ch; i += 1; continue;
+        }
+      }
+      // flush last field/row
+      row.push(field);
+      rows.push(row);
+      return rows
+        .map(r => r.map(c => c.replace(/^\s+|\s+$/g, ""))) // trim
+        .filter(r => r.some(c => c.length > 0));           // drop empty rows
+    };
 
-    const idx = (name: string) =>
-      cols.findIndex((c) => c.toLowerCase() === name.toLowerCase());
+    const rows = parseCSV(text);
+    if (!rows.length) {
+      showToast("CSV is empty.", "error");
+      return;
+    }
 
-    const iDealer = idx("Dealer");
-    const iState = idx("State");
-    const iRegion = idx("Region");
-    const iType = idx("Type");
-    const iStatus = idx("Status");
+    // Normalize helpers
+    const titleCase = (s: string) =>
+      (s || "")
+        .toLowerCase()
+        .replace(/(^|\s|\-|\/)\S/g, (m) => m.toUpperCase());
 
+    const normType = (s: string) => {
+      const v = (s || "").trim().toLowerCase();
+      if (v.startsWith("fran")) return "Franchise";
+      if (v.startsWith("ind"))  return "Independent";
+      return "Independent"; // default
+    };
+
+    const normStatus = (s: string) => {
+      const v = (s || "").trim().toLowerCase();
+      if (!v) return "Active";
+      if (["active","a"].includes(v)) return "Active";
+      if (["pending","pend"].includes(v)) return "Pending";
+      if (["prospect","prospective","new","lead"].includes(v)) return "Prospect";
+      if (["inactive","in-active","disabled"].includes(v)) return "Inactive";
+      if (["blacklisted","black list","black-list","black listed","blacklist","blocked"].includes(v)) return "Black Listed";
+      return "Active";
+    };
+
+    const header = rows[0].map(h => h.replace(/^\"|\"$/g, ""));
+    const lower = header.map(h => h.toLowerCase());
+
+    const idx = (...names: string[]) => {
+      const candidates = names.map(n => n.toLowerCase());
+      for (let j = 0; j < lower.length; j++) {
+        if (candidates.includes(lower[j])) return j;
+      }
+      return -1;
+    };
+
+    // Required: Dealer + State
+    const iDealer = idx("dealer","name","dealer name");
+    const iState  = idx("state","st");
     if (iDealer < 0 || iState < 0) {
       showToast("CSV must include at least Dealer and State columns.", "error");
       return;
     }
 
-    const payload = rows
-      .map((line) => {
-        const parts = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-        const name   = (parts[iDealer] || "").trim();
-        const state  = (parts[iState]  || "").trim().toUpperCase();
-        const region = (parts[iRegion] || "").trim();
-        const type   = normType(parts[iType]   || "");
-        const status = normStatus(parts[iStatus] || "");        
-        return { name, state, region, type, status };
-      })
-      .filter((r) => r.name && r.state);
+    // Optional fields
+    const iRegion   = idx("region","area");
+    const iType     = idx("type");
+    const iStatus   = idx("status");
+    const iAddress  = idx("address"); // single Address -> address1
+    const iAddress1 = idx("address1","addr1","street","street1");
+    const iAddress2 = idx("address2","addr2","street2");
+    const iCity     = idx("city","town");
+    const iZip      = idx("zip","zip code","zipcode","postal","postal code");
 
-    if (payload.length === 0) {
-      showToast("No valid rows found.", "error");
+    const existingKeys = new Set(dealers.map(d => `${d.name.trim().toLowerCase()}|${d.state.trim().toUpperCase()}`));
+
+    type UpsertRow = {
+      name: string; state: string; region?: string | null; type?: string; status?: string;
+      address1?: string | null; address2?: string | null; city?: string | null; zip?: string | null;
+      _isUpdate?: boolean; // preview only
+    };
+
+    const valid: UpsertRow[] = [];
+    const issues: { row: number; message: string }[] = [];
+    const seen = new Set<string>(); // intra-file dupes (name|state)
+
+    for (let r = 1; r < rows.length; r++) {
+      const cols = rows[r];
+      // skip blank lines
+      if (!cols || cols.every(c => !c || !c.trim())) continue;
+
+      const nameRaw  = (cols[iDealer]  || "").trim();
+      const stateRaw = (cols[iState]   || "").trim();
+      const region   = iRegion   >= 0 ? titleCase(cols[iRegion]   || "") : "";
+      const type     = iType     >= 0 ? normType(cols[iType]      || "") : undefined;
+      const status   = iStatus   >= 0 ? normStatus(cols[iStatus]  || "") : undefined;
+      const address1 = iAddress1 >= 0 ? (cols[iAddress1] || "").trim()
+                        : (iAddress >= 0 ? (cols[iAddress] || "").trim() : "");
+      const address2 = iAddress2 >= 0 ? (cols[iAddress2] || "").trim() : "";
+      const city     = iCity     >= 0 ? titleCase(cols[iCity]     || "") : "";
+      const zip      = iZip      >= 0 ? (cols[iZip]      || "").trim() : "";
+
+      const name  = nameRaw;
+      const state = stateRaw.toUpperCase();
+
+      const rowNo = r + 1; // 1-based with header
+
+      if (!name || !state) {
+        issues.push({ row: rowNo, message: "Missing Dealer or State" });
+        continue;
+      }
+      if (!/^[A-Z]{2}$/.test(state)) {
+        issues.push({ row: rowNo, message: `Bad state code "${stateRaw}"` });
+        continue;
+      }
+
+      const key = `${name.trim().toLowerCase()}|${state}`;
+      if (seen.has(key)) {
+        issues.push({ row: rowNo, message: "Duplicate in file (same Dealer+State as a previous row)" });
+        continue;
+      }
+      seen.add(key);
+
+      valid.push({
+        name,
+        state,
+        region: region || null,
+        type: type || "Independent",
+        status: status || "Active",
+        address1: address1 ? address1 : null,
+        address2: address2 ? address2 : null,
+        city: city ? city : null,
+        zip: zip ? zip : null,
+        _isUpdate: existingKeys.has(key)
+      });
+    }
+
+    const willUpdate = valid.filter(v => v._isUpdate).length;
+    const willInsert = valid.length - willUpdate;
+
+    setImportPreview({
+      fileName: file.name,
+      rows: valid,
+      issues,
+      stats: {
+        total: rows.length - 1,
+        valid: valid.length,
+        invalid: issues.length,
+        willInsert,
+        willUpdate,
+        duplicateRows: issues.filter(i => /Duplicate in file/.test(i.message)).length
+      }
+    });
+    setImportPreviewOpen(true);
+    showToast(`Parsed ${rows.length - 1} row(s): ${valid.length} valid, ${issues.length} with issues.`, "success");
+  } catch (e: any) {
+    showToast(e?.message || "Import failed", "error");
+  }
+};
+
+// After preview, call this to upsert (respects importMode)
+const confirmImportDealers = async () => {
+  try {
+    if (!importPreview || !importPreview.rows.length) {
+      showToast("Nothing to import.", "error");
+      return;
+    }
+    const existingKeys = new Set(dealers.map(d => `${d.name.trim().toLowerCase()}|${d.state.trim().toUpperCase()}`));
+    let rowsToImport = importPreview.rows;
+    if (importMode === 'new') rowsToImport = rowsToImport.filter(r => !existingKeys.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+    if (importMode === 'updates') rowsToImport = rowsToImport.filter(r =>  existingKeys.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+
+    if (!rowsToImport.length) {
+      showToast("Your current filter leaves 0 rows to import.", "error");
       return;
     }
 
-    // Upsert into Supabase (dedupe on name+state; see SQL note below)
+    // Remove preview-only flag
+    const payload = rowsToImport.map(({ _isUpdate, ...rest }) => rest);
+
     const { error } = await supabase
       .from("dealers")
       .upsert(payload, { onConflict: "name,state", ignoreDuplicates: false });
 
     if (error) throw error;
 
-    // Refresh local list from Supabase (so UI shows the latest)
+    // Refresh from Supabase
     const { data, error: selErr } = await supabase
       .from("dealers")
-      .select(
-        "id,name,state,region,type,status,address1,address2,city,zip,contacts,assigned_rep_username,last_visited,sending_deals,no_deal_reasons"
-      )
+      .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,assigned_rep_username,last_visited,sending_deals,no_deal_reasons")
       .order("name");
 
     if (selErr) throw selErr;
@@ -4431,14 +4592,14 @@ const normStatus = (s: string) => {
       contacts: Array.isArray(r.contacts) ? r.contacts : [],
       assignedRepUsername: r.assigned_rep_username || undefined,
       lastVisited: r.last_visited ? String(r.last_visited) : undefined,
-      sendingDeals:
-        typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
+      sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
       noDealReasons: r.no_deal_reasons || undefined,
     }));
 
     setDealers(fromDb);
+    setImportPreviewOpen(false);
+    setImportPreview(null);
     showToast(`Imported ${payload.length} dealer(s).`, "success");
-    setImportDealersOpen(false);
   } catch (e: any) {
     showToast(e?.message || "Import failed", "error");
   }
@@ -4659,23 +4820,119 @@ const normStatus = (s: string) => {
   Import Dealers (CSV)
 </button>
       </div>
-      {importDealersOpen && (
-  <Modal title="Import Dealers (CSV)" onClose={() => setImportDealersOpen(false)}>
-    <div className="space-y-3">
-      <div className="text-sm text-slate-700">
-        Expected headers (case-insensitive): <b>Dealer</b>, <b>Address1</b>, <b>City</b>, <b>State</b>, <b>Zip Code</b>, <b>Type</b>, <b>Status</b>, <b>Region</b>.<br />
-        Missing fields are allowed; they’ll be left blank. If duplicates are detected, you’ll be prompted to skip or import anyway.
+      {importPreviewOpen && importPreview && (
+  <Modal title={`Import Preview — ${importPreview.fileName}`} onClose={() => { setImportPreviewOpen(false); setImportPreview(null); }}>
+    <div className="space-y-4">
+      {/* Stats */}
+      <div className="grid sm:grid-cols-2 gap-3 text-sm">
+        <div className="rounded-lg border p-3 bg-white">
+          <div className="font-medium text-slate-700 mb-1">Summary</div>
+          <div>Total rows (excluding header): <b>{importPreview.stats.total}</b></div>
+          <div>Valid rows: <b>{importPreview.stats.valid}</b></div>
+          <div>Issues: <b>{importPreview.issues.length}</b> {importPreview.issues.length ? `(including ${importPreview.stats.duplicateRows} duplicate-in-file)` : ''}</div>
+          <div className="mt-2">Will insert: <b>{importPreview.stats.willInsert}</b> • Will update: <b>{importPreview.stats.willUpdate}</b></div>
+        </div>
+        <div className="rounded-lg border p-3 bg-white">
+          <div className="font-medium text-slate-700 mb-1">Import Mode</div>
+          <div className="flex gap-2">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" name="importMode" checked={importMode==='all'} onChange={() => setImportMode('all')} />
+              Import all valid rows
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" name="importMode" checked={importMode==='new'} onChange={() => setImportMode('new')} />
+              Only NEW (skip updates)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" name="importMode" checked={importMode==='updates'} onChange={() => setImportMode('updates')} />
+              Only UPDATES (skip new)
+            </label>
+          </div>
+        </div>
       </div>
-      <input
-        type="file"
-        accept=".csv,text/csv"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) handleImportDealers(f);
-          e.currentTarget.value = "";
-          setImportDealersOpen(false);
-        }}
-      />
+
+      {/* Preview table */}
+      <div className="rounded-lg border overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="text-left py-2 px-3 font-medium">Action</th>
+              <th className="text-left py-2 px-3 font-medium">Dealer</th>
+              <th className="text-left py-2 px-3 font-medium">State</th>
+              <th className="text-left py-2 px-3 font-medium">Region</th>
+              <th className="text-left py-2 px-3 font-medium">City</th>
+              <th className="text-left py-2 px-3 font-medium">Type</th>
+              <th className="text-left py-2 px-3 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(() => {
+              const existing = new Set(dealers.map(d => `${d.name.trim().toLowerCase()}|${d.state.trim().toUpperCase()}`));
+              let rows = importPreview.rows;
+              if (importMode === 'new') rows = rows.filter(r => !existing.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+              if (importMode === 'updates') rows = rows.filter(r =>  existing.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+              const sample = rows.slice(0, 20);
+              return (
+                <>
+                  {sample.map((r, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="py-1.5 px-3">{existing.has(`${r.name.trim().toLowerCase()}|${r.state}`) ? 'Update' : 'Insert'}</td>
+                      <td className="py-1.5 px-3">{r.name}</td>
+                      <td className="py-1.5 px-3">{r.state}</td>
+                      <td className="py-1.5 px-3">{r.region || '—'}</td>
+                      <td className="py-1.5 px-3">{r.city || '—'}</td>
+                      <td className="py-1.5 px-3">{r.type}</td>
+                      <td className="py-1.5 px-3">{r.status}</td>
+                    </tr>
+                  ))}
+                  {rows.length > 20 && (
+                    <tr className="border-t">
+                      <td colSpan={7} className="py-2 px-3 text-slate-500">…and {rows.length - 20} more row(s)</td>
+                    </tr>
+                  )}
+                  {rows.length === 0 && (
+                    <tr className="border-t">
+                      <td colSpan={7} className="py-2 px-3 text-slate-500">No rows match the current import mode.</td>
+                    </tr>
+                  )}
+                </>
+              );
+            })()}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Issues */}
+      {importPreview.issues.length > 0 && (
+        <div className="rounded-lg border p-3 bg-amber-50 text-amber-800">
+          <div className="font-medium mb-1">Found {importPreview.issues.length} issue(s). These rows will not be imported:</div>
+          <ul className="list-disc pl-5 text-sm max-h-40 overflow-auto">
+            {importPreview.issues.slice(0, 30).map((iss, i) => (
+              <li key={i}>Row {iss.row}: {iss.message}</li>
+            ))}
+            {importPreview.issues.length > 30 && <li>…and {importPreview.issues.length - 30} more</li>}
+          </ul>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-2">
+        <button className="px-3 py-2 rounded-lg border" onClick={() => { setImportPreviewOpen(false); setImportPreview(null); }}>
+          Cancel
+        </button>
+        <button
+          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
+          onClick={confirmImportDealers}
+        >
+          {(() => {
+            const existing = new Set(dealers.map(d => `${d.name.trim().toLowerCase()}|${d.state.trim().toUpperCase()}`));
+            let rows = importPreview.rows;
+            if (importMode === 'new') rows = rows.filter(r => !existing.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+            if (importMode === 'updates') rows = rows.filter(r =>  existing.has(`${r.name.trim().toLowerCase()}|${r.state}`));
+            return `Import ${rows.length} row(s)`;
+          })()}
+        </button>
+      </div>
     </div>
   </Modal>
 )}
