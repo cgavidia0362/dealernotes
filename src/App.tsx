@@ -3904,7 +3904,7 @@ useEffect(() => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
-  const [importDealersOpen, setImportDealersOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Import preview state
 const [importPreview, setImportPreview] = useState<{
   fileName: string;
@@ -4813,12 +4813,26 @@ const confirmImportDealers = async () => {
         <button className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={exportAllNotes}>
           Export All Notes
         </button>
-        <button
-  className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
-  onClick={() => setImportDealersOpen(true)}
->
-  Import Dealers (CSV)
-</button>
+        <span className="relative inline-block">
+  {/* Hidden file input used by the Import button */}
+  <input
+    ref={fileInputRef}
+    type="file"
+    accept=".csv,text/csv"
+    className="hidden"
+    onChange={(e) => {
+      const f = e.target.files?.[0];
+      if (f) handleImportDealers(f);   // parse -> preview modal
+      e.currentTarget.value = "";      // lets you re-select the same file later
+    }}
+  />
+  <button
+    className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+    onClick={() => fileInputRef.current?.click()}
+  >
+    Import Dealers (CSV)
+  </button>
+</span>
       </div>
       {importPreviewOpen && importPreview && (
   <Modal title={`Import Preview — ${importPreview.fileName}`} onClose={() => { setImportPreviewOpen(false); setImportPreview(null); }}>
