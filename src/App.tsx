@@ -3124,7 +3124,7 @@ useEffect(() => {
       // 1) Load basic user profiles
       const { data: profiles, error: pErr } = await supabase
         .from('profiles')
-        .select('id, username, email, role, status, phone')
+        .select('id, username, email, role, status')
         .order('username', { ascending: true });
 
       if (pErr) throw pErr;
