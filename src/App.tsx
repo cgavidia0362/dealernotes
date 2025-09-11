@@ -1568,14 +1568,23 @@ const DealerNotesView: React.FC<{
   const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
   // Friendly "Rep: ..." display for this dealer
   const assignedRepDisplay = useMemo(() => {
-    // If there is an explicit override, show that user
+    // 1) Prefer explicit override
     if (dealer.assignedRepUsername) {
       const u = users.find((u) => u.username === dealer.assignedRepUsername);
       return u?.name || dealer.assignedRepUsername;
     }
-    // Otherwise leave empty (we can extend later)
+    // 2) Otherwise, show any rep(s) who cover this dealer's state+region
+    const covering = users.filter(
+      (u) =>
+        u.role === "Rep" &&
+        (u.states?.includes?.(dealer.state) ?? false) &&
+        (u.regionsByState?.[dealer.state]?.includes?.(dealer.region) ?? false)
+    );
+    if (covering.length > 0) {
+      return covering.map((u) => u.name || u.username).join(", ");
+    }
     return "";
-  }, [dealer.assignedRepUsername, users]);  
+  }, [dealer.assignedRepUsername, dealer.state, dealer.region, users]);  
 
   /* -------------------------- Status / Details ------------------------- */
   const updateDealer = async (patch: Partial<Dealer>) => {
@@ -1928,11 +1937,14 @@ const doDeleteDealer = async () => {
 
       <div className="text-sm text-slate-600">
         {dealer.region}, {dealer.state} • <span className="uppercase">{dealer.type}</span>
-        {assignedRepDisplay && (
-        <div className="text-xs text-slate-500 mt-1">
-          Rep: <span className="font-medium">{assignedRepDisplay}</span>
+        <div className="mt-1">
+          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-xs font-medium">
+            Rep:
+            <span className="font-semibold">
+              {assignedRepDisplay || "— None —"}
+            </span>
+          </span>
         </div>
-      )}
       </div>
     </div>
 
