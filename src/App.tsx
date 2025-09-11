@@ -1622,10 +1622,10 @@ useEffect(() => {
 // --- Edit mode + who is allowed to edit ---
 // Only Admin/Manager OR the owning rep (assigned to this dealer) may edit
 const [isEditing, setIsEditing] = useState(false);
-const canEditOwner = Boolean(isAdminManager || assignedToMe);
+const canEditOwner = repCanAccess;
 
 // Only enable inputs when we're in edit mode AND the viewer is allowed
-const canEditSection = isEditing && canEditOwner;
+const canEditSection = isEditing && repCanAccess;
 
   useEffect(() => {
     setEditDetails({
@@ -1663,6 +1663,26 @@ const canEditSection = isEditing && canEditOwner;
     showToast("Status updated.", "success");
   };
 // Save the dealer name (no role gate)
+// Friendly "Rep: ..." display for this dealer (override → coverage)
+const assignedRepDisplay = useMemo(() => {
+  // 1) Prefer explicit override
+  if (dealer.assignedRepUsername) {
+    const u = users.find((u) => u.username === dealer.assignedRepUsername);
+    return u?.name || dealer.assignedRepUsername;
+  }
+  // 2) Otherwise, show any rep(s) who cover this dealer's state+region
+  const covering = users.filter(
+    (u) =>
+      u.role === "Rep" &&
+      (u.states?.includes?.(dealer.state) ?? false) &&
+      (u.regionsByState?.[dealer.state]?.includes?.(dealer.region) ?? false)
+  );
+  if (covering.length > 0) {
+    return covering.map((u) => u.name || u.username).join(", ");
+  }
+  return "";
+}, [dealer.assignedRepUsername, dealer.state, dealer.region, users]);
+
 const saveName = () => {
   const newName = (nameDraft || "").trim();
   if (!newName) return showToast("Dealer name is required.", "error");
@@ -1902,6 +1922,14 @@ const doDeleteDealer = async () => {
 
       <div className="text-sm text-slate-600">
         {dealer.region}, {dealer.state} • <span className="uppercase">{dealer.type}</span>
+        <div className="mt-1">
+          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-xs font-medium">
+            Rep:
+            <span className="font-semibold">
+              {assignedRepDisplay || "— None —"}
+            </span>
+          </span>
+        </div>
       </div>
     </div>
 
@@ -1913,7 +1941,7 @@ const doDeleteDealer = async () => {
       <div className="text-sm text-slate-600">Last visited: {dealer.lastVisited || "-"}</div>
 
       {/* Actions: Edit (if allowed) or Save/Cancel while editing */}
-      {!isEditing && canEditOwner && (
+      {!isEditing && repCanAccess && (
         <button
           onClick={() => setIsEditing(true)}
           className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
@@ -1975,7 +2003,7 @@ const doDeleteDealer = async () => {
           <div className="flex items-center justify-between mb-3">
             <div className="text-slate-800 font-semibold">Dealer Details</div>
             <div className="text-xs text-slate-500">
-  {canEditOwner ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
+  {repCanAccess ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
 </div>
           </div>
 
@@ -3326,8 +3354,8 @@ useEffect(() => {
       // 1) Load basic user profiles
       const { data: profiles, error: pErr } = await supabase
         .from('profiles')
-        .select('id, username, email, name, role, status, phone')
-        .order('name', { ascending: true });
+        .select('id, username, email, role, status')          // ← no name, no phone
+.order('username', { ascending: true });              // ← sort by username, not name
 
       if (pErr) throw pErr;
       const idToUsername = new Map<string, string>();
