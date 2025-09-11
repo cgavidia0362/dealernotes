@@ -4,8 +4,7 @@
     invite/password storage scaffolding, and login enhancements.)
 =========================================================================== */
 import { supabase } from './supabaseClient';
-import * as React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ---- Polyfill & types for String.replaceAll (to support older TS libs) ----
 declare global {
@@ -1567,6 +1566,16 @@ const DealerNotesView: React.FC<{
 
   const repHasCoverage = isRep && coversState && coversRegion;
   const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
+  // Friendly "Rep: ..." display for this dealer
+  const assignedRepDisplay = useMemo(() => {
+    // If there is an explicit override, show that user
+    if (dealer.assignedRepUsername) {
+      const u = users.find((u) => u.username === dealer.assignedRepUsername);
+      return u?.name || dealer.assignedRepUsername;
+    }
+    // Otherwise leave empty (we can extend later)
+    return "";
+  }, [dealer.assignedRepUsername, users]);  
 
   /* -------------------------- Status / Details ------------------------- */
   const updateDealer = async (patch: Partial<Dealer>) => {
@@ -1663,12 +1672,29 @@ const canEditSection = isEditing && canEditOwner;
     showToast("Status updated.", "success");
   };
 // Save the dealer name (no role gate)
-const saveName = () => {
+// Save details + (optionally) name, then close edit mode.
+// IMPORTANT: we do NOT include sendingDeals / noDealReasons here,
+// so we never overwrite that section by accident.
+const saveAllAndClose = () => {
   const newName = (nameDraft || "").trim();
-  if (!newName) return showToast("Dealer name is required.", "error");
-  if (newName === dealer.name) return showToast("No changes to save.", "info");
-  updateDealer({ name: newName });
-  showToast(`Dealer name updated to "${newName}".`, "success");
+  if (newName && newName !== dealer.name) {
+    updateDealer({ name: newName });
+  }
+
+  updateDealer({
+    address1: editDetails.address1?.trim(),
+    address2: editDetails.address2?.trim(),
+    city: editDetails.city?.trim(),
+    zip: editDetails.zip?.trim(),
+    state: editDetails.state,
+    region: editDetails.region,
+    contacts: (editDetails.contacts || [])
+      .filter((c) => c?.name || c?.phone)
+      .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
+  });
+
+  showToast("Dealer saved.", "success");
+  setIsEditing(false);
 };
 
   const toggleSendingDeals = (val: boolean) => {
@@ -1902,6 +1928,11 @@ const doDeleteDealer = async () => {
 
       <div className="text-sm text-slate-600">
         {dealer.region}, {dealer.state} • <span className="uppercase">{dealer.type}</span>
+        {assignedRepDisplay && (
+        <div className="text-xs text-slate-500 mt-1">
+          Rep: <span className="font-medium">{assignedRepDisplay}</span>
+        </div>
+      )}
       </div>
     </div>
 
@@ -1924,28 +1955,12 @@ const doDeleteDealer = async () => {
 
       {isEditing && (
         <>
-          <button
-            onClick={() => {
-              const newName = (nameDraft || "").trim();
-              if (!newName) return showToast("Dealer name is required.", "error");
-              updateDealer({
-                ...editDetails,
-                name: newName,
-                address1: editDetails.address1?.trim(),
-                address2: editDetails.address2?.trim(),
-                city: editDetails.city?.trim(),
-                zip: editDetails.zip?.trim(),
-                contacts: (editDetails.contacts || [])
-                  .filter((c) => c?.name || c?.phone)
-                  .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
-              });
-              showToast("Dealer updated.", "success");
-              setIsEditing(false);
-            }}
-            className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
-          >
-            Save
-          </button>
+<button
+  onClick={saveAllAndClose}
+  className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+>
+  Save
+</button>
 
           <button
             onClick={() => {
@@ -2065,14 +2080,6 @@ const doDeleteDealer = async () => {
                 </div>
               ))}
             </div>
-
-            {canEditSection && (
-  <div className="mt-4 flex justify-end">
-    <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setIsEditing(false)}>
-      Done
-    </button>
-  </div>
-)}
           </div>
         </div>
 
@@ -2085,7 +2092,13 @@ const doDeleteDealer = async () => {
       label="Assigned Rep"
       value={dealer.assignedRepUsername || ""}
       onChange={(v) => changeAssignedRep(v)}
-      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
+      options={[
+        { label: "— None —", value: "" },
+        ...users.filter((u) => u.role === "Rep").map((r) => ({
+          label: `${r.name} (${r.username})`,
+          value: r.username,
+        })),
+      ]}
     />
   </div>
 )}
@@ -2094,11 +2107,11 @@ const doDeleteDealer = async () => {
             <div className="text-slate-800 font-semibold mb-2">Are they sending deals?</div>
             <div className="flex items-center gap-3">
               <label className="inline-flex items-center gap-2 text-sm">
-                <input type="radio" name="sending" checked={dealer.sendingDeals === true} onChange={() => toggleSendingDeals(true)} disabled={!canEditSection} />
+                <input type="radio" name="sending" checked={dealer.sendingDeals === true} onChange={() => toggleSendingDeals(true)} disabled={!repCanAccess} />
                 Yes
               </label>
               <label className="inline-flex items-center gap-2 text-sm">
-                <input type="radio" name="sending" checked={dealer.sendingDeals === false} onChange={() => toggleSendingDeals(false)} disabled={!canEditSection}/>
+                <input type="radio" name="sending" checked={dealer.sendingDeals === false} onChange={() => toggleSendingDeals(false)} disabled={!repCanAccess}/>
                 No
               </label>
             </div>
@@ -2118,13 +2131,13 @@ const doDeleteDealer = async () => {
                       type="checkbox"
                       checked={Boolean((dealer.noDealReasons as any)?.[key])}
                       onChange={(e) => setReason(key as any, e.target.checked)}
-                      disabled={!canEditSection}
+                      disabled={!repCanAccess}
                     />
                     {label}
                   </label>
                 ))}
                 <div>
-                  <TextField label="Other" value={dealer.noDealReasons?.other || ""} onChange={(v) => setReason("other", v)} disabled={!canEditSection}/>
+                  <TextField label="Other" value={dealer.noDealReasons?.other || ""} onChange={(v) => setReason("other", v)} disabled={!repCanAccess}/>
                 </div>
               </div>
             )}
