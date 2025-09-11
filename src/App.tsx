@@ -2499,6 +2499,104 @@ const ReportingView: React.FC<{
     }
     return arr;
   }, [notVisited30, nvSort]);
+  // Sending Deals — stats for current scope (All reps or the selected rep)
+  const sendingStats = useMemo(() => {
+    type RepRow = { username: string; name: string; yes: number; no: number; unknown: number };
+    const byRep: Record<string, RepRow> = {};
+    const reasonsCount: Record<
+      "funding" | "agreement" | "feesRates" | "programDiff" | "eContracting" | "notSigned" | "other",
+      number
+    > = {
+      funding: 0,
+      agreement: 0,
+      feesRates: 0,
+      programDiff: 0,
+      eContracting: 0,
+      notSigned: 0,
+      other: 0,
+    };
+
+    let yes = 0;
+    let no = 0;
+    let unknown = 0;
+
+    for (const d of scopedDealers) {
+      const rep = getRepForDealer(d); // prefer override; else first covering rep
+      const key = rep?.username || "__unassigned__";
+      if (!byRep[key]) {
+        byRep[key] = {
+          username: rep?.username || "__unassigned__",
+          name: rep?.name || rep?.username || "— Unassigned —",
+          yes: 0,
+          no: 0,
+          unknown: 0,
+        };
+      }
+
+      if (d.sendingDeals === true) {
+        yes++;
+        byRep[key].yes++;
+      } else if (d.sendingDeals === false) {
+        no++;
+        byRep[key].no++;
+
+        const r = d.noDealReasons || {};
+        if (r.funding) reasonsCount.funding++;
+        if (r.agreement) reasonsCount.agreement++;
+        if (r.feesRates) reasonsCount.feesRates++;
+        if (r.programDiff) reasonsCount.programDiff++;
+        if (r.eContracting) reasonsCount.eContracting++;
+        if (r.notSigned) reasonsCount.notSigned++;
+        if ((r.other || "").trim()) reasonsCount.other++;
+      } else {
+        unknown++;
+        byRep[key].unknown++;
+      }
+    }
+
+    const byRepRows = Object.values(byRep).sort((a, b) => a.name.localeCompare(b.name));
+    return { total: scopedDealers.length, yes, no, unknown, byRepRows, reasonsCount };
+  }, [scopedDealers, users]);
+
+  // Export the scoped "Sending Deals" view to CSV
+  const exportSendingDealsCSV = () => {
+    const rows: (string | number)[][] = [["Dealer", "State", "Region", "Rep", "Sending Deals", "Reasons"]];
+    for (const d of scopedDealers) {
+      const rep = getRepForDealer(d);
+      const repName = rep?.name || rep?.username || "";
+      const sd = d.sendingDeals === true ? "Yes" : d.sendingDeals === false ? "No" : "—";
+
+      const r = d.noDealReasons || {};
+      const reasons: string[] = [];
+      if (r.funding) reasons.push("Funding");
+      if (r.agreement) reasons.push("Agreement");
+      if (r.feesRates) reasons.push("Fees/Rates");
+      if (r.programDiff) reasons.push("Program Difference");
+      if (r.eContracting) reasons.push("E-Contracting");
+      if (r.notSigned) reasons.push("Not Signed");
+      if ((r.other || "").trim()) reasons.push(`Other: ${(r.other || "").replaceAll(",", " ")}`);
+
+      rows.push([
+        d.name,
+        d.state,
+        d.region,
+        repName,
+        sd,
+        reasons.join("; "),
+      ]);
+    }
+    // Create and download CSV (self-contained)
+const csv = rows
+.map(r => r.map(v => String(v).replaceAll('"','""')).map(v => `"${v}"`).join(","))
+.join("\n");
+const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+const url = URL.createObjectURL(blob);
+const a = document.createElement("a");
+a.href = url;
+a.download = `sending_deals_${repFilter === "ALL" ? "all_reps" : (selectedRep?.username || "rep")}.csv`;
+a.click();
+URL.revokeObjectURL(url);
+  };
 
   // Export "Not Visited (Active) in Last 30 Days" to CSV
   const exportNotVisitedCSV = () => {
@@ -2651,7 +2749,76 @@ const ReportingView: React.FC<{
             </div>
           </div>
         </Card>
+      {/* Sending Deals */}
+      <Card
+        title="Sending Deals"
+        subtitle={repFilter === "ALL" ? "All reps" : `Rep: ${selectedRep?.name || selectedRep?.username || ""}`}
+      >
+        <div className="grid md:grid-cols-3 gap-4">
+          {/* Counts */}
+          <div className="rounded-lg border p-3">
+            <div className="text-slate-500 text-xs uppercase tracking-wide">Totals in view</div>
+            <div className="mt-2 space-y-1 text-slate-800">
+              <div className="flex justify-between">
+                <span>Yes</span>
+                <span className="font-semibold">{sendingStats.yes}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>No</span>
+                <span className="font-semibold">{sendingStats.no}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Unknown</span>
+                <span className="font-semibold">{sendingStats.unknown}</span>
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-slate-500">Total dealers: {sendingStats.total}</div>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={exportSendingDealsCSV}
+                className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs sm:text-sm"
+              >
+                Export CSV
+              </button>
+            </div>
+          </div>
 
+          {/* By Rep */}
+          <div className="rounded-lg border p-3">
+            <div className="text-slate-500 text-xs uppercase tracking-wide">By Rep</div>
+            <div className="mt-2 divide-y">
+              {sendingStats.byRepRows.map((r) => (
+                <div key={r.username} className="py-1.5 text-sm flex justify-between gap-3">
+                  <div className="w-44 truncate">{r.name}</div>
+                  <div className="flex gap-4 text-slate-700">
+                    <span title="Yes">Y: <b>{r.yes}</b></span>
+                    <span title="No">N: <b>{r.no}</b></span>
+                    <span title="Unknown">U: <b>{r.unknown}</b></span>
+                  </div>
+                </div>
+              ))}
+              {sendingStats.byRepRows.length === 0 && (
+                <div className="text-slate-500 text-sm py-1.5">Nothing to show.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Reasons (for No) */}
+          <div className="rounded-lg border p-3">
+            <div className="text-slate-500 text-xs uppercase tracking-wide">Reasons (No)</div>
+            <div className="mt-2 space-y-1 text-sm">
+              <div className="flex justify-between"><span>Funding</span><span className="font-semibold">{sendingStats.reasonsCount.funding}</span></div>
+              <div className="flex justify-between"><span>Agreement</span><span className="font-semibold">{sendingStats.reasonsCount.agreement}</span></div>
+              <div className="flex justify-between"><span>Fees / Rates</span><span className="font-semibold">{sendingStats.reasonsCount.feesRates}</span></div>
+              <div className="flex justify-between"><span>Program Difference</span><span className="font-semibold">{sendingStats.reasonsCount.programDiff}</span></div>
+              <div className="flex justify-between"><span>E-Contracting</span><span className="font-semibold">{sendingStats.reasonsCount.eContracting}</span></div>
+              <div className="flex justify-between"><span>Not Signed</span><span className="font-semibold">{sendingStats.reasonsCount.notSigned}</span></div>
+              <div className="flex justify-between"><span>Other</span><span className="font-semibold">{sendingStats.reasonsCount.other}</span></div>
+            </div>
+          </div>
+        </div>
+      </Card>
         <Card title="Visits in Last 30 Days">
           <div className="space-y-3">
             {visitsLast30.rows.map(([user, count]) => (
