@@ -4,7 +4,8 @@
     invite/password storage scaffolding, and login enhancements.)
 =========================================================================== */
 import { supabase } from './supabaseClient';
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // ---- Polyfill & types for String.replaceAll (to support older TS libs) ----
 declare global {
@@ -1566,25 +1567,6 @@ const DealerNotesView: React.FC<{
 
   const repHasCoverage = isRep && coversState && coversRegion;
   const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
-  // Friendly "Rep: ..." display for this dealer
-  const assignedRepDisplay = useMemo(() => {
-    // 1) Prefer explicit override
-    if (dealer.assignedRepUsername) {
-      const u = users.find((u) => u.username === dealer.assignedRepUsername);
-      return u?.name || dealer.assignedRepUsername;
-    }
-    // 2) Otherwise, show any rep(s) who cover this dealer's state+region
-    const covering = users.filter(
-      (u) =>
-        u.role === "Rep" &&
-        (u.states?.includes?.(dealer.state) ?? false) &&
-        (u.regionsByState?.[dealer.state]?.includes?.(dealer.region) ?? false)
-    );
-    if (covering.length > 0) {
-      return covering.map((u) => u.name || u.username).join(", ");
-    }
-    return "";
-  }, [dealer.assignedRepUsername, dealer.state, dealer.region, users]);  
 
   /* -------------------------- Status / Details ------------------------- */
   const updateDealer = async (patch: Partial<Dealer>) => {
@@ -1640,10 +1622,10 @@ useEffect(() => {
 // --- Edit mode + who is allowed to edit ---
 // Only Admin/Manager OR the owning rep (assigned to this dealer) may edit
 const [isEditing, setIsEditing] = useState(false);
-const canEditOwner = repCanAccess;
+const canEditOwner = Boolean(isAdminManager || assignedToMe);
 
 // Only enable inputs when we're in edit mode AND the viewer is allowed
-const canEditSection = isEditing && repCanAccess;
+const canEditSection = isEditing && canEditOwner;
 
   useEffect(() => {
     setEditDetails({
@@ -1681,29 +1663,12 @@ const canEditSection = isEditing && repCanAccess;
     showToast("Status updated.", "success");
   };
 // Save the dealer name (no role gate)
-// Save details + (optionally) name, then close edit mode.
-// IMPORTANT: we do NOT include sendingDeals / noDealReasons here,
-// so we never overwrite that section by accident.
-const saveAllAndClose = () => {
+const saveName = () => {
   const newName = (nameDraft || "").trim();
-  if (newName && newName !== dealer.name) {
-    updateDealer({ name: newName });
-  }
-
-  updateDealer({
-    address1: editDetails.address1?.trim(),
-    address2: editDetails.address2?.trim(),
-    city: editDetails.city?.trim(),
-    zip: editDetails.zip?.trim(),
-    state: editDetails.state,
-    region: editDetails.region,
-    contacts: (editDetails.contacts || [])
-      .filter((c) => c?.name || c?.phone)
-      .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
-  });
-
-  showToast("Dealer saved.", "success");
-  setIsEditing(false);
+  if (!newName) return showToast("Dealer name is required.", "error");
+  if (newName === dealer.name) return showToast("No changes to save.", "info");
+  updateDealer({ name: newName });
+  showToast(`Dealer name updated to "${newName}".`, "success");
 };
 
   const toggleSendingDeals = (val: boolean) => {
@@ -1937,14 +1902,6 @@ const doDeleteDealer = async () => {
 
       <div className="text-sm text-slate-600">
         {dealer.region}, {dealer.state} • <span className="uppercase">{dealer.type}</span>
-        <div className="mt-1">
-          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-xs font-medium">
-            Rep:
-            <span className="font-semibold">
-              {assignedRepDisplay || "— None —"}
-            </span>
-          </span>
-        </div>
       </div>
     </div>
 
@@ -1956,7 +1913,7 @@ const doDeleteDealer = async () => {
       <div className="text-sm text-slate-600">Last visited: {dealer.lastVisited || "-"}</div>
 
       {/* Actions: Edit (if allowed) or Save/Cancel while editing */}
-      {!isEditing && repCanAccess && (
+      {!isEditing && canEditOwner && (
         <button
           onClick={() => setIsEditing(true)}
           className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
@@ -1967,12 +1924,28 @@ const doDeleteDealer = async () => {
 
       {isEditing && (
         <>
-<button
-  onClick={saveAllAndClose}
-  className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
->
-  Save
-</button>
+          <button
+            onClick={() => {
+              const newName = (nameDraft || "").trim();
+              if (!newName) return showToast("Dealer name is required.", "error");
+              updateDealer({
+                ...editDetails,
+                name: newName,
+                address1: editDetails.address1?.trim(),
+                address2: editDetails.address2?.trim(),
+                city: editDetails.city?.trim(),
+                zip: editDetails.zip?.trim(),
+                contacts: (editDetails.contacts || [])
+                  .filter((c) => c?.name || c?.phone)
+                  .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
+              });
+              showToast("Dealer updated.", "success");
+              setIsEditing(false);
+            }}
+            className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+          >
+            Save
+          </button>
 
           <button
             onClick={() => {
@@ -2002,7 +1975,7 @@ const doDeleteDealer = async () => {
           <div className="flex items-center justify-between mb-3">
             <div className="text-slate-800 font-semibold">Dealer Details</div>
             <div className="text-xs text-slate-500">
-            {repCanAccess ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
+  {canEditOwner ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
 </div>
           </div>
 
@@ -2092,6 +2065,14 @@ const doDeleteDealer = async () => {
                 </div>
               ))}
             </div>
+
+            {canEditSection && (
+  <div className="mt-4 flex justify-end">
+    <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setIsEditing(false)}>
+      Done
+    </button>
+  </div>
+)}
           </div>
         </div>
 
@@ -2104,13 +2085,7 @@ const doDeleteDealer = async () => {
       label="Assigned Rep"
       value={dealer.assignedRepUsername || ""}
       onChange={(v) => changeAssignedRep(v)}
-      options={[
-        { label: "— None —", value: "" },
-        ...users.filter((u) => u.role === "Rep").map((r) => ({
-          label: `${r.name} (${r.username})`,
-          value: r.username,
-        })),
-      ]}
+      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
     />
   </div>
 )}
@@ -2119,11 +2094,11 @@ const doDeleteDealer = async () => {
             <div className="text-slate-800 font-semibold mb-2">Are they sending deals?</div>
             <div className="flex items-center gap-3">
               <label className="inline-flex items-center gap-2 text-sm">
-                <input type="radio" name="sending" checked={dealer.sendingDeals === true} onChange={() => toggleSendingDeals(true)} disabled={!repCanAccess} />
+                <input type="radio" name="sending" checked={dealer.sendingDeals === true} onChange={() => toggleSendingDeals(true)} disabled={!canEditSection} />
                 Yes
               </label>
               <label className="inline-flex items-center gap-2 text-sm">
-                <input type="radio" name="sending" checked={dealer.sendingDeals === false} onChange={() => toggleSendingDeals(false)} disabled={!repCanAccess}/>
+                <input type="radio" name="sending" checked={dealer.sendingDeals === false} onChange={() => toggleSendingDeals(false)} disabled={!canEditSection}/>
                 No
               </label>
             </div>
@@ -2143,13 +2118,13 @@ const doDeleteDealer = async () => {
                       type="checkbox"
                       checked={Boolean((dealer.noDealReasons as any)?.[key])}
                       onChange={(e) => setReason(key as any, e.target.checked)}
-                      disabled={!repCanAccess}
+                      disabled={!canEditSection}
                     />
                     {label}
                   </label>
                 ))}
                 <div>
-                  <TextField label="Other" value={dealer.noDealReasons?.other || ""} onChange={(v) => setReason("other", v)} disabled={!repCanAccess}/>
+                  <TextField label="Other" value={dealer.noDealReasons?.other || ""} onChange={(v) => setReason("other", v)} disabled={!canEditSection}/>
                 </div>
               </div>
             )}
@@ -2395,7 +2370,8 @@ const ReportingView: React.FC<{
 
   // NEW: modal controls for “Not Visited”
   const [nvOpen, setNvOpen] = useState(false);
-
+  const [sendNoOpen, setSendNoOpen] = useState(false);
+  const [sendNoSearch, setSendNoSearch] = useState("");
   // NEW: Dealer List modal
   const [dlOpen, setDlOpen] = useState(false);
   const [nvSort, setNvSort] = useState<"longest" | "recent">("longest"); // longest = oldest visit first
@@ -2558,7 +2534,7 @@ const ReportingView: React.FC<{
     return { total: scopedDealers.length, yes, no, unknown, byRepRows, reasonsCount };
   }, [scopedDealers, users]);
 
-  // Export the scoped "Sending Deals" view to CSV
+  // Export the scoped "Sending Deals" view to CSV (all dealers in scope with status+reasons)
   const exportSendingDealsCSV = () => {
     const rows: (string | number)[][] = [["Dealer", "State", "Region", "Rep", "Sending Deals", "Reasons"]];
     for (const d of scopedDealers) {
@@ -2585,17 +2561,18 @@ const ReportingView: React.FC<{
         reasons.join("; "),
       ]);
     }
+
     // Create and download CSV (self-contained)
-const csv = rows
-.map(r => r.map(v => String(v).replaceAll('"','""')).map(v => `"${v}"`).join(","))
-.join("\n");
-const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-const url = URL.createObjectURL(blob);
-const a = document.createElement("a");
-a.href = url;
-a.download = `sending_deals_${repFilter === "ALL" ? "all_reps" : (selectedRep?.username || "rep")}.csv`;
-a.click();
-URL.revokeObjectURL(url);
+    const csv = rows
+      .map(r => r.map(v => String(v).replaceAll('"','""')).map(v => `"${v}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sending_deals_${repFilter === "ALL" ? "all_reps" : (selectedRep?.username || "rep")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // Export "Not Visited (Active) in Last 30 Days" to CSV
@@ -2618,6 +2595,65 @@ URL.revokeObjectURL(url);
     const a = document.createElement("a");
     a.href = url;
     a.download = `not_visited_30_${repFilter === "ALL" ? "all_reps" : (selectedRep?.username || "rep")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  // Dealers NOT sending — rows honoring current Rep filter
+  type SendNoRow = { dealer: string; state: string; region: string; rep: string; reasons: string };
+  const sendingNoRows: SendNoRow[] = useMemo(() => {
+    const rows: SendNoRow[] = [];
+    for (const d of scopedDealers) {
+      if (d.sendingDeals === false) {
+        const rep = repFilter === "ALL" ? getRepForDealer(d) : selectedRep;
+        const r = d.noDealReasons || {};
+        const reasons: string[] = [];
+        if (r.funding) reasons.push("Funding");
+        if (r.agreement) reasons.push("Agreement");
+        if (r.feesRates) reasons.push("Fees/Rates");
+        if (r.programDiff) reasons.push("Program Difference");
+        if (r.eContracting) reasons.push("E-Contracting");
+        if (r.notSigned) reasons.push("Not Signed");
+        if ((r.other || "").trim()) reasons.push(`Other: ${(r.other || "").trim()}`);
+        rows.push({
+          dealer: d.name,
+          state: d.state,
+          region: d.region,
+          rep: rep ? (rep.name || rep.username) : "",
+          reasons: reasons.join("; "),
+        });
+      }
+    }
+    rows.sort(
+      (a, b) =>
+        (a.region || "").localeCompare(b.region || "") ||
+        (a.dealer || "").localeCompare(b.dealer || "")
+    );
+    return rows;
+  }, [scopedDealers, repFilter, selectedRep, users]);
+
+  const sendingNoFiltered = useMemo(() => {
+    const q = sendNoSearch.trim().toLowerCase();
+    if (!q) return sendingNoRows;
+    return sendingNoRows.filter((r) =>
+      r.dealer.toLowerCase().includes(q) ||
+      r.region.toLowerCase().includes(q) ||
+      r.state.toLowerCase().includes(q) ||
+      r.rep.toLowerCase().includes(q) ||
+      r.reasons.toLowerCase().includes(q)
+    );
+  }, [sendingNoRows, sendNoSearch]);
+
+  const exportSendingNoCSV = () => {
+    const header = ["Dealer", "State", "Region", "Rep", "Reasons"];
+    const rows = [header, ...sendingNoFiltered.map(r => [r.dealer, r.state, r.region, r.rep, r.reasons])];
+    const csv = rows
+      .map(r => r.map(v => String(v).replaceAll('"','""')).map(v => `"${v}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `not_sending_${repFilter === "ALL" ? "all_reps" : (selectedRep?.username || "rep")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -2717,38 +2753,6 @@ URL.revokeObjectURL(url);
         <KPI title="Inactive" value={kpis.byStatus.Inactive} />
         <KPI title="Black Listed" value={kpis.byStatus["Black Listed"]} />
       </div>
-
-      {/* Trends */}
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card title="Visits — Last 6 Months">
-          <div className="space-y-2">
-            {months.map((m) => (
-              <div key={m.key} className="flex items-center gap-3">
-                <div className="w-28 text-sm">
-                  {m.label}
-                </div>
-                <div className="flex-1">{bar(monthlyVisits[m.key] || 0, Math.max(...Object.values(monthlyVisits), 1))}</div>
-                <div className="w-10 text-right text-sm">{monthlyVisits[m.key] || 0}</div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-4">
-            <div>
-              <div className="text-xs text-slate-500">This Month</div>
-              <div className="text-2xl font-semibold text-slate-800">{thisMonthCount}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Last Month</div>
-              <div className="text-2xl font-semibold text-slate-800">{lastMonthCount}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Δ Change</div>
-              <div className={`text-2xl font-semibold ${delta >= 0 ? "text-green-600" : "text-red-600"}`}>
-                {delta >= 0 ? "▲" : "▼"} {Math.abs(delta)}
-              </div>
-            </div>
-          </div>
-        </Card>
       {/* Sending Deals */}
       <Card
         title="Sending Deals"
@@ -2784,23 +2788,21 @@ URL.revokeObjectURL(url);
             </div>
           </div>
 
-          {/* By Rep */}
+          {/* Drill-down */}
           <div className="rounded-lg border p-3">
-            <div className="text-slate-500 text-xs uppercase tracking-wide">By Rep</div>
-            <div className="mt-2 divide-y">
-              {sendingStats.byRepRows.map((r) => (
-                <div key={r.username} className="py-1.5 text-sm flex justify-between gap-3">
-                  <div className="w-44 truncate">{r.name}</div>
-                  <div className="flex gap-4 text-slate-700">
-                    <span title="Yes">Y: <b>{r.yes}</b></span>
-                    <span title="No">N: <b>{r.no}</b></span>
-                    <span title="Unknown">U: <b>{r.unknown}</b></span>
-                  </div>
-                </div>
-              ))}
-              {sendingStats.byRepRows.length === 0 && (
-                <div className="text-slate-500 text-sm py-1.5">Nothing to show.</div>
-              )}
+            <div className="text-slate-500 text-xs uppercase tracking-wide">Details</div>
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setSendNoOpen(true)}
+                disabled={sendingStats?.no === 0}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm ${sendingStats?.no === 0 ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-indigo-600 text-white"}`}
+              >
+                View dealers (No)
+              </button>
+              <div className="text-xs text-slate-500 mt-2">
+                Shows only dealers marked <b>No</b> in the current filter.
+              </div>
             </div>
           </div>
 
@@ -2819,6 +2821,39 @@ URL.revokeObjectURL(url);
           </div>
         </div>
       </Card>
+
+      {/* Trends */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card title="Visits — Last 6 Months">
+          <div className="space-y-2">
+            {months.map((m) => (
+              <div key={m.key} className="flex items-center gap-3">
+                <div className="w-28 text-sm">
+                  {m.label}
+                </div>
+                <div className="flex-1">{bar(monthlyVisits[m.key] || 0, Math.max(...Object.values(monthlyVisits), 1))}</div>
+                <div className="w-10 text-right text-sm">{monthlyVisits[m.key] || 0}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs text-slate-500">This Month</div>
+              <div className="text-2xl font-semibold text-slate-800">{thisMonthCount}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">Last Month</div>
+              <div className="text-2xl font-semibold text-slate-800">{lastMonthCount}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">Δ Change</div>
+              <div className={`text-2xl font-semibold ${delta >= 0 ? "text-green-600" : "text-red-600"}`}>
+                {delta >= 0 ? "▲" : "▼"} {Math.abs(delta)}
+              </div>
+            </div>
+          </div>
+        </Card>
+
         <Card title="Visits in Last 30 Days">
           <div className="space-y-3">
             {visitsLast30.rows.map(([user, count]) => (
@@ -3291,8 +3326,8 @@ useEffect(() => {
       // 1) Load basic user profiles
       const { data: profiles, error: pErr } = await supabase
         .from('profiles')
-        .select('id, username, email, role, status')
-        .order('username', { ascending: true });
+        .select('id, username, email, name, role, status, phone')
+        .order('name', { ascending: true });
 
       if (pErr) throw pErr;
       const idToUsername = new Map<string, string>();
