@@ -1631,10 +1631,10 @@ useEffect(() => {
 // --- Edit mode + who is allowed to edit ---
 // Only Admin/Manager OR the owning rep (assigned to this dealer) may edit
 const [isEditing, setIsEditing] = useState(false);
-const canEditOwner = Boolean(isAdminManager || assignedToMe);
+const canEditOwner = repCanAccess;
 
 // Only enable inputs when we're in edit mode AND the viewer is allowed
-const canEditSection = isEditing && canEditOwner;
+const canEditSection = isEditing && repCanAccess;
 
   useEffect(() => {
     setEditDetails({
@@ -1944,7 +1944,7 @@ const doDeleteDealer = async () => {
       <div className="text-sm text-slate-600">Last visited: {dealer.lastVisited || "-"}</div>
 
       {/* Actions: Edit (if allowed) or Save/Cancel while editing */}
-      {!isEditing && canEditOwner && (
+      {!isEditing && repCanAccess && (
         <button
           onClick={() => setIsEditing(true)}
           className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
@@ -1990,7 +1990,7 @@ const doDeleteDealer = async () => {
           <div className="flex items-center justify-between mb-3">
             <div className="text-slate-800 font-semibold">Dealer Details</div>
             <div className="text-xs text-slate-500">
-  {canEditOwner ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
+            {repCanAccess ? (isEditing ? "Editing" : "Read-only (click Edit)") : "Read-only"}
 </div>
           </div>
 
