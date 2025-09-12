@@ -1705,6 +1705,40 @@ const saveName = () => {
     const current = dealer.noDealReasons || {};
     updateDealer({ noDealReasons: { ...current, [key]: v as any } });
   };
+// Save everything and exit edit mode (single success toast)
+const saveAllAndClose = () => {
+  if (!repCanAccess) return showToast("You don't have permission to edit.", "error");
+
+  const newName = (nameDraft || "").trim();
+  if (!newName) return showToast("Dealer name is required.", "error");
+// normalize types for TS: use undefined (not null)
+const sending: boolean | undefined =
+  typeof dealer.sendingDeals === "boolean" ? dealer.sendingDeals : undefined;
+
+const reasons /*: Dealer["noDealReasons"] | undefined*/ =
+  dealer.noDealReasons && Object.keys(dealer.noDealReasons as any).length
+    ? dealer.noDealReasons
+    : undefined;
+  updateDealer({
+    name: newName,
+    address1: editDetails.address1?.trim(),
+    address2: editDetails.address2?.trim(),
+    city:     editDetails.city?.trim(),
+    zip:      editDetails.zip?.trim(),
+    state:    editDetails.state,
+    region:   editDetails.region,
+    contacts: (editDetails.contacts || [])
+      .filter((c) => c?.name || c?.phone)
+      .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
+
+    // also persist current sending status & reasons
+    sendingDeals: sending,
+    noDealReasons: reasons,    
+  });
+
+  showToast("Dealer saved.", "success");
+  setIsEditing(false);
+};
 
   /* ------------------------------- Notes -------------------------------- */
   // SUPER-SAFE useMemo: never index undefined
@@ -1997,28 +2031,11 @@ const doDeleteDealer = async () => {
       {isEditing && (
         <>
           <button
-            onClick={() => {
-              const newName = (nameDraft || "").trim();
-              if (!newName) return showToast("Dealer name is required.", "error");
-              updateDealer({
-                ...editDetails,
-                name: newName,
-                address1: editDetails.address1?.trim(),
-                address2: editDetails.address2?.trim(),
-                city: editDetails.city?.trim(),
-                zip: editDetails.zip?.trim(),
-                contacts: (editDetails.contacts || [])
-                  .filter((c) => c?.name || c?.phone)
-                  .map((c) => ({ name: (c.name || "").trim(), phone: (c.phone || "").trim() })),
-              });
-              showToast("Dealer updated.", "success");
-              setIsEditing(false);
-            }}
-            className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
-          >
-            Save
-          </button>
-
+  onClick={saveAllAndClose}
+  className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+>
+  Save
+</button>
           <button
             onClick={() => {
               setNameDraft(dealer.name);
@@ -2137,14 +2154,6 @@ const doDeleteDealer = async () => {
                 </div>
               ))}
             </div>
-
-            {canEditSection && (
-  <div className="mt-4 flex justify-end">
-    <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setIsEditing(false)}>
-      Done
-    </button>
-  </div>
-)}
           </div>
         </div>
 
