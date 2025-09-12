@@ -1778,19 +1778,26 @@ useEffect(() => {
   })();
 }, [dealer.id]);
 const addNote = async () => {
-  // 1) Basic guards
   if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
   const text = (noteText || "").trim();
   if (!text) return showToast("Please enter a note.", "error");
 
+  // Get the currently logged-in auth user (has the real auth.uid())
+  const { data: authData, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !authData?.user) {
+    return showToast("You're not signed in. Please log in again.", "error");
+  }
+  const authUserId = authData.user.id;
+
   try {
-    // 2) Insert the note into Supabase
+    // 1) Insert the note (RLS expects user_id = auth.uid())
     const payload = {
       dealer_id: dealer.id,
+      user_id: authUserId,                           // ✅ important: NOT session!.id
       author_username: session?.username || "",
-      category: noteCategory,   // "Visit" | "Problem" | "Other" | "Manager"
+      category: noteCategory,
       text: text,
-      created_at: new Date().toISOString(), // explicit timestamp is fine
+      created_at: new Date().toISOString(),
     };
 
     const { data, error } = await supabase
@@ -1801,7 +1808,7 @@ const addNote = async () => {
 
     if (error) throw error;
 
-    // 3) Map DB row -> our Note shape and prepend to state
+    // 2) Show it immediately
     const row: any = data;
     const inserted: Note = {
       id: String(row.id),
@@ -1811,11 +1818,10 @@ const addNote = async () => {
       category: row.category as NoteCategory,
       text: row.text,
     };
+    setNotes(prev => [inserted, ...prev]);
+    setNoteText("");
 
-    setNotes(prev => [inserted, ...prev]);   // appears immediately
-    setNoteText("");                         // clear textarea
-
-    // 4) If Managers/Admins choose "Manager", also create a Task (keep your logic)
+    // 3) Manager-note behavior: also create a Task for the rep
     if (noteCategory === "Manager" && canUseManagerNote) {
       const repUser = dealer.assignedRepUsername || session!.username;
       if (repUser) {
@@ -1827,10 +1833,10 @@ const addNote = async () => {
           createdAtISO: new Date().toISOString(),
         };
 
-        // Optimistic task add
+        // Optimistic UI
         setTasks((prev) => [t, ...prev]);
 
-        // Persist task
+        // Persist in Supabase
         const { error: taskErr } = await supabase.from("dealer_tasks").insert({
           id: t.id,
           dealer_id: t.dealerId,
@@ -1840,7 +1846,6 @@ const addNote = async () => {
         });
 
         if (taskErr) {
-          // roll back optimistic add if DB failed
           setTasks((prev) => prev.filter((x) => x.id !== t.id));
           showToast(taskErr.message || "Could not create task", "error");
         } else {
@@ -1849,7 +1854,7 @@ const addNote = async () => {
       }
     }
 
-    // 5) Success toast for the note
+    // 4) All good
     showToast("Note added.", "success");
   } catch (e: any) {
     showToast(e?.message || "Failed to add note.", "error");
