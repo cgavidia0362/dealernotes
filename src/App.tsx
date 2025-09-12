@@ -1778,43 +1778,82 @@ useEffect(() => {
   })();
 }, [dealer.id]);
 const addNote = async () => {
+  // 1) Basic guards
   if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
-  if (!noteText.trim()) return showToast("Please enter a note.", "error");
- // When Managers/Admins add a "Manager" note, also create a Task for the assigned Rep
-if (noteCategory === "Manager" && canUseManagerNote) {
-  const repUser = dealer.assignedRepUsername || session!.username;
-  if (repUser) {
-    const t: Task = {
-      id: uid(),
-      dealerId: dealer.id,
-      repUsername: repUser,
-      text: dealer.name,
-      createdAtISO: new Date().toISOString(),
+  const text = (noteText || "").trim();
+  if (!text) return showToast("Please enter a note.", "error");
+
+  try {
+    // 2) Insert the note into Supabase
+    const payload = {
+      dealer_id: dealer.id,
+      author_username: session?.username || "",
+      category: noteCategory,   // "Visit" | "Problem" | "Other" | "Manager"
+      text: text,
+      created_at: new Date().toISOString(), // explicit timestamp is fine
     };
 
-    // Optimistic UI
-    setTasks((prev) => [t, ...prev]);
+    const { data, error } = await supabase
+      .from("dealer_notes")
+      .insert([payload])
+      .select("id,dealer_id,author_username,created_at,category,text")
+      .single();
 
-    // Persist in Supabase
-    const { error } = await supabase.from("dealer_tasks").insert({
-      id: t.id,
-      dealer_id: t.dealerId,
-      rep_username: t.repUsername,
-      text: t.text,
-      created_at: t.createdAtISO,
-    });
+    if (error) throw error;
 
-    if (error) {
-      // roll back optimistic add if DB failed
-      setTasks((prev) => prev.filter((x) => x.id !== t.id));
-      showToast(error.message || "Could not create task", "error");
-    } else {
-      showToast("Task created for the rep.", "success");
+    // 3) Map DB row -> our Note shape and prepend to state
+    const row: any = data;
+    const inserted: Note = {
+      id: String(row.id),
+      dealerId: row.dealer_id,
+      authorUsername: row.author_username,
+      tsISO: new Date(row.created_at).toISOString(),
+      category: row.category as NoteCategory,
+      text: row.text,
+    };
+
+    setNotes(prev => [inserted, ...prev]);   // appears immediately
+    setNoteText("");                         // clear textarea
+
+    // 4) If Managers/Admins choose "Manager", also create a Task (keep your logic)
+    if (noteCategory === "Manager" && canUseManagerNote) {
+      const repUser = dealer.assignedRepUsername || session!.username;
+      if (repUser) {
+        const t: Task = {
+          id: uid(),
+          dealerId: dealer.id,
+          repUsername: repUser,
+          text: dealer.name,
+          createdAtISO: new Date().toISOString(),
+        };
+
+        // Optimistic task add
+        setTasks((prev) => [t, ...prev]);
+
+        // Persist task
+        const { error: taskErr } = await supabase.from("dealer_tasks").insert({
+          id: t.id,
+          dealer_id: t.dealerId,
+          rep_username: t.repUsername,
+          text: t.text,
+          created_at: t.createdAtISO,
+        });
+
+        if (taskErr) {
+          // roll back optimistic add if DB failed
+          setTasks((prev) => prev.filter((x) => x.id !== t.id));
+          showToast(taskErr.message || "Could not create task", "error");
+        } else {
+          showToast("Task created for the rep.", "success");
+        }
+      }
     }
-  }
-}
 
-  showToast("Note added.", "success");
+    // 5) Success toast for the note
+    showToast("Note added.", "success");
+  } catch (e: any) {
+    showToast(e?.message || "Failed to add note.", "error");
+  }
 };
 
   // Helper: check if there is an incomplete task tied to this dealer for the current rep
