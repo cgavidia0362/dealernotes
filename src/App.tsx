@@ -3732,6 +3732,7 @@ useEffect(() => {
     session={session}
     users={users}
     dealers={dealers}
+    notes={notes}
     setRoute={setRoute}
     showToast={showToast}
   />
@@ -4188,9 +4189,10 @@ const RepRouteView: React.FC<{
   session: Session;
   users: User[];
   dealers: Dealer[];
+  notes: Note[];
   setRoute: (r: RouteKey) => void;
   showToast: (m: string, k?: ToastKind) => void;
-}> = ({ session, users, dealers, setRoute, showToast }) => {
+}> = ({ session, users, dealers, notes, setRoute, showToast }) => {
   const me = users.find((u) => u.username === session?.username) || null;
   const isRep = session?.role === "Rep";
 
@@ -4343,6 +4345,77 @@ const RepRouteView: React.FC<{
     saveLS(LS_LAST_SELECTED_DEALER, dealerId);
     setRoute("dealer-notes");
   };
+  // === Daily Summary state/helpers (same as Home) ===
+const isAdminManager = session?.role === "Admin" || session?.role === "Manager";
+const [dailyOpen, setDailyOpen] = useState(false);
+const [summaryRange, setSummaryRange] = useState<"today"|"yesterday"|"7d">("today");
+const [summaryRep, setSummaryRep] = useState<string>("ALL");
+const repOptions = useMemo(
+  () => users.filter(u => u.role === "Rep").map(r => ({ label: `${r.name} (${r.username})`, value: r.username })),
+  [users]
+);
+
+// tiny helpers
+const isToday = (iso: string) => {
+  const d = new Date(iso), now = new Date();
+  return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+};
+const isYesterday = (iso: string) => {
+  const d = new Date(iso), now = new Date();
+  const y = new Date(now.getFullYear(), now.getMonth(), now.getDate()-1);
+  return d.getFullYear()===y.getFullYear() && d.getMonth()===y.getMonth() && d.getDate()===y.getDate();
+};
+const isWithin7Days = (iso: string) => {
+  const ts = new Date(iso).getTime(), now = Date.now(), seven = 7*24*60*60*1000;
+  return now - ts <= seven && ts <= now;
+};
+const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
+const dealerById = (id: string) => dealers.find(d => d.id === id);
+
+// scoped notes (role + range + optional rep for managers)
+const summaryNotes = useMemo(() => {
+  let scoped = notes.slice();
+  const isRep = session?.role === "Rep";
+  if (isRep) {
+    scoped = scoped.filter(n => n.authorUsername === session!.username);
+  } else if (isAdminManager) {
+    if (summaryRep !== "ALL") scoped = scoped.filter(n => n.authorUsername === summaryRep);
+  }
+  if (summaryRange === "today") scoped = scoped.filter(n => isToday(n.tsISO));
+  else if (summaryRange === "yesterday") scoped = scoped.filter(n => isYesterday(n.tsISO));
+  else scoped = scoped.filter(n => isWithin7Days(n.tsISO));
+  return scoped.sort((a,b)=> (a.tsISO > b.tsISO ? -1 : 1));
+}, [notes, session, isAdminManager, summaryRep, summaryRange]);
+
+const buildSummaryPlainText = () => {
+  if (summaryNotes.length === 0) return "No notes in selected range.";
+  const lines = summaryNotes.map(n => {
+    const d = dealerById(n.dealerId);
+    const where = d ? `${d.name} — ${d.region}, ${d.state}` : "(dealer removed)";
+    return `• ${fmtDateTime(n.tsISO)} | ${where} | ${n.category} | by ${n.authorUsername}: ${n.text}`;
+  });
+  return lines.join("\n");
+};
+const csvEscape = (v: unknown) => {
+  const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+};
+const downloadCSV = (filename: string, rows: (string|number)[][]) => {
+  const csv = rows.map(r => r.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+};
+const exportSummaryCSV = () => {
+  const rows: (string|number)[][] = [["Time","Dealer","Region","State","Category","Author","Note"]];
+  summaryNotes.forEach(n => {
+    const d = dealerById(n.dealerId);
+    rows.push([ new Date(n.tsISO).toLocaleString(), d?.name||"", d?.region||"", d?.state||"", n.category, n.authorUsername, n.text||"" ]);
+  });
+  const today = new Date().toISOString().slice(0,10);
+  const scope = session?.role === "Rep" ? session?.username : (summaryRep === "ALL" ? "all" : summaryRep);
+  downloadCSV(`daily_summary_${summaryRange}_${today}_${scope}.csv`, rows);
+};
+
 // compact button classes (mobile-friendly)
 const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
   return (
@@ -4364,6 +4437,14 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
           <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>Clear Day</button>
           <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>Export CSV</button>
           <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>Copy All</button>
+          {/* Daily Summary — same look/behavior as Home */}
+<button
+  onClick={() => setDailyOpen(true)}
+  className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
+  title="Show notes summary"
+>
+  📄 Daily Summary
+</button>
         </div>
       </div>
 
@@ -4449,6 +4530,85 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
           </div>
         )}
       </div>
+      {/* Daily Summary Modal (Rep + Admin/Manager) */}
+{dailyOpen && (
+  <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
+    {/* Controls */}
+    <div className="flex flex-col md:flex-row md:items-end gap-3 mb-3">
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-slate-600">Range:</label>
+        <SelectField
+          label="Range"
+          value={summaryRange}
+          onChange={(v) => setSummaryRange(v as "today" | "yesterday" | "7d")}
+          options={[
+            { label: "Today", value: "today" },
+            { label: "Yesterday", value: "yesterday" },
+            { label: "Last 7 Days", value: "7d" },
+          ]}
+        />
+      </div>
+
+      {isAdminManager && (
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-slate-600">Rep:</label>
+          <SelectField
+            label="Rep"
+            value={summaryRep}
+            onChange={(v) => setSummaryRep(v)}
+            options={[{ label: "All Reps", value: "ALL" }, ...repOptions]}
+          />
+        </div>
+      )}
+
+      <div className="ml-auto flex items-center gap-2">
+        <button
+          className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
+          onClick={() => {
+            navigator.clipboard.writeText(buildSummaryPlainText());
+            showToast("Summary copied.", "success");
+          }}
+        >
+          Copy All
+        </button>
+        <button
+          className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+          onClick={exportSummaryCSV}
+        >
+          Export CSV
+        </button>
+      </div>
+    </div>
+
+    {/* List */}
+    <div className="space-y-3">
+      {summaryNotes.length === 0 && (
+        <div className="text-sm text-slate-500">No notes in selected range.</div>
+      )}
+      {summaryNotes.map((n) => {
+        const d = dealerById(n.dealerId);
+        return (
+          <div key={n.id} className="border rounded-lg p-3">
+            <div className="text-xs text-slate-500 mb-1">{fmtDateTime(n.tsISO)}</div>
+            <div className="text-sm font-medium text-slate-800">{d ? d.name : "(dealer removed)"}</div>
+            <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
+            <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
+              {n.category}
+            </div>
+            <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
+            <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
+          </div>
+        );
+      })}
+    </div>
+
+    <div className="mt-4 flex items-center justify-end">
+      <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
+        Close
+      </button>
+    </div>
+  </Modal>
+)}
     </div>
   );
 };
