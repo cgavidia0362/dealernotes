@@ -4448,14 +4448,6 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
           <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>Clear Day</button>
           <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>Export CSV</button>
           <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>Copy All</button>
-          {/* Daily Summary — same look/behavior as Home */}
-<button
-  onClick={() => setDailyOpen(true)}
-  className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-  title="Show notes summary"
->
-  📄 Daily Summary
-</button>
         </div>
       </div>
 
