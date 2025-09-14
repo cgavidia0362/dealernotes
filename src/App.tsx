@@ -4423,8 +4423,19 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+
+{/* Title row + Daily Summary button (mobile-friendly) */}
+<div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
+  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+  <button
+    onClick={() => setDailyOpen(true)}
+    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow text-sm"
+    title="Show notes summary"
+  >
+    📄 Daily Summary
+  </button>
+</div>
         </div>
         <div className="flex items-center gap-2">
           <input
