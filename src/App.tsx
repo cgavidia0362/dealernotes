@@ -4343,7 +4343,8 @@ const RepRouteView: React.FC<{
     saveLS(LS_LAST_SELECTED_DEALER, dealerId);
     setRoute("dealer-notes");
   };
-
+// compact button classes (mobile-friendly)
+const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -4428,7 +4429,7 @@ const RepRouteView: React.FC<{
         ) : (
           <div className="space-y-2">
             {sortedRoute.map((r, idx) => (
-              <div key={r.dealerId} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl p-3">
+             <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
                 <div>
                   <div className="font-semibold">{idx+1}. {r.dealer.name}</div>
                   <div className="text-sm text-slate-600">
@@ -4436,12 +4437,12 @@ const RepRouteView: React.FC<{
                   </div>
                   <div className="mt-1 text-xs text-slate-500">{r.dealer.region}</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <a href={mapUrl(r.dealer)} target="_blank" rel="noreferrer" className="px-3 py-2 rounded-lg border">Maps</a>
-                  <button className="px-3 py-2 rounded-lg border" onClick={()=>viewDealer(r.dealer.id)}>View</button>
-                  <button className="px-3 py-2 rounded-lg border" onClick={()=>move(r.dealerId, "up")}>&uarr;</button>
-                  <button className="px-3 py-2 rounded-lg border" onClick={()=>move(r.dealerId, "down")}>&darr;</button>
-                  <button className="px-3 py-2 rounded-lg border" onClick={()=>removeDealer(r.dealerId)}>Remove</button>
+                <div className="flex flex-wrap gap-2 w-full md:w-auto md:justify-end">
+                <a href={mapUrl(r.dealer)} target="_blank" rel="noreferrer" className={actionBtn}>Maps</a>
+<button className={actionBtn} onClick={()=>viewDealer(r.dealer.id)}>View</button>
+<button className={actionBtn} onClick={()=>move(r.dealerId, "up")}>&uarr;</button>
+<button className={actionBtn} onClick={()=>move(r.dealerId, "down")}>&darr;</button>
+<button className={actionBtn} onClick={()=>removeDealer(r.dealerId)}>Remove</button>
                 </div>
               </div>
             ))}
