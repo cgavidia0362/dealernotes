@@ -112,7 +112,7 @@ type Task = {
   completedAtISO?: string; // ← NEW (for “Complete Task”)
 };
 
-type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "reset"; // ← NEW "reset"
+type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reset";
 
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
@@ -121,7 +121,7 @@ const LS_REGIONS = "demo_regions";
 const LS_TASKS = "demo_tasks";
 const LS_NOTES = "demo_notes";
 const LS_LAST_SELECTED_DEALER = "demo_last_selected_dealer";
-
+const LS_REP_ROUTE = "demo_rep_route"; // per-user routes (local preview)
 // NEW: simple auth-related storage (demo-level)
 const LS_INVITES = "demo_invites";     // token -> { userId, createdAtISO }
 const LS_PASSWORDS = "demo_passwords"; // username -> password (demo only)
@@ -503,7 +503,14 @@ const TopBar: React.FC<{
           <div className="text-slate-800 font-semibold">Dealer Notes</div>
           {session && (
             <nav className="ml-6 hidden md:flex items-center gap-1">
-              <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+              <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} /> 
+              {session?.role === "Rep" && (
+  <Tab
+    label="Rep Route"
+    active={route === "rep-route"}
+    onClick={() => setRoute("rep-route")}
+  />
+)}
               <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
               <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
             </nav>
@@ -541,6 +548,13 @@ const TopBar: React.FC<{
         <div className="md:hidden border-t">
           <div className="flex">
             <MobileTab label="Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+            {session?.role === "Rep" && (
+  <MobileTab
+    label="Route"
+    active={route === "rep-route"}
+    onClick={() => setRoute("rep-route")}
+  />
+)}
             <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
             <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
             <button className="ml-auto px-3 py-2 text-sm text-blue-600" onClick={onLogout}>
@@ -3713,7 +3727,15 @@ useEffect(() => {
                 showToast={showToast}
               />
             )}
-
+{route === "rep-route" && (
+  <RepRouteView
+    session={session}
+    users={users}
+    dealers={dealers}
+    setRoute={setRoute}
+    showToast={showToast}
+  />
+)}
             {route === "reporting" && <ReportingView dealers={dealers} users={users} notes={notes} />}
 
             {route === "user-management" && (
@@ -4158,6 +4180,275 @@ const ResetInviteModal: React.FC<{
         </div>
       )}
     </Modal>
+  );
+};
+/* ------------------------------- Rep Route -------------------------------- */
+
+const RepRouteView: React.FC<{
+  session: Session;
+  users: User[];
+  dealers: Dealer[];
+  setRoute: (r: RouteKey) => void;
+  showToast: (m: string, k?: ToastKind) => void;
+}> = ({ session, users, dealers, setRoute, showToast }) => {
+  const me = users.find((u) => u.username === session?.username) || null;
+  const isRep = session?.role === "Rep";
+
+  // Gate: reps only (Managers/Admins shouldn't land here)
+  if (!isRep) {
+    return (
+      <div className="p-6 text-center text-slate-600">
+        This page is only for reps.
+      </div>
+    );
+  }
+
+  const routeKeyForUser = (username?: string | null) =>
+    `${LS_REP_ROUTE}_${username || "anon"}`;
+
+  type RouteStop = { dealerId: string; position: number };
+  type RouteByDate = Record<string, RouteStop[]>;
+
+  const [dateStr, setDateStr] = useState<string>(todayISO());
+  const [routeByDate, setRouteByDate] = useState<RouteByDate>(() =>
+    loadLS<RouteByDate>(routeKeyForUser(session?.username), {})
+  );
+
+  // Persist whenever it changes
+  useEffect(() => {
+    saveLS(routeKeyForUser(session?.username), routeByDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeByDate]);
+
+  // Build accessible dealers for this rep (assignment OR coverage)
+  const accessibleDealers = useMemo(() => {
+    if (!me) return [] as Dealer[];
+    const can = (d: Dealer) => {
+      const assigned = d.assignedRepUsername === me.username;
+      const coversState = !!me.states?.includes?.(d.state);
+      const coversRegion =
+        !!me.regionsByState?.[d.state]?.includes?.(d.region);
+      return assigned || (coversState && coversRegion);
+    };
+    return dealers.filter(can);
+  }, [dealers, me]);
+
+  // Filters
+  const unique = (arr: (string | undefined)[]) =>
+    Array.from(new Set(arr.filter(Boolean) as string[])).sort();
+
+  const states = useMemo(() => unique(accessibleDealers.map(d => d.state)), [accessibleDealers]);
+  const regions = useMemo(() => unique(accessibleDealers.map(d => d.region)), [accessibleDealers]);
+  const cities = useMemo(() => unique(accessibleDealers.map(d => d.city)), [accessibleDealers]);
+
+  const [q, setQ] = useState("");
+  const [state, setState] = useState("");
+  const [region, setRegion] = useState("");
+  const [city, setCity] = useState("");
+
+  const route: RouteStop[] = routeByDate[dateStr] || [];
+  const routeIds = new Set(route.map(r => r.dealerId));
+
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    return accessibleDealers.filter(d => {
+      if (routeIds.has(d.id)) return false; // hide ones already in route
+      if (state && d.state !== state) return false;
+      if (region && d.region !== region) return false;
+      if (city && d.city !== city) return false;
+      if (!query) return true;
+      const hay = `${d.name} ${d.city || ""} ${d.state} ${d.region}`.toLowerCase();
+      return hay.includes(query);
+    }).slice(0, 50);
+  }, [q, state, region, city, accessibleDealers, routeIds]);
+
+  const sortedRoute = useMemo(() => {
+    return [...route]
+      .map(r => ({ ...r, dealer: dealers.find(d => d.id === r.dealerId) }))
+      .filter((r): r is RouteStop & { dealer: Dealer } => !!r.dealer)
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+  }, [route, dealers]);
+
+  const addDealer = (d: Dealer) => {
+    setRouteByDate(prev => {
+      const current = prev[dateStr] || [];
+      if (current.some(r => r.dealerId === d.id)) return prev;
+      const nextPos = current.length ? Math.max(...current.map(r => r.position || 0)) + 1 : 1;
+      const next = [...current, { dealerId: d.id, position: nextPos }];
+      return { ...prev, [dateStr]: next };
+    });
+    showToast("Added to route.", "success");
+  };
+
+  const removeDealer = (dealerId: string) => {
+    setRouteByDate(prev => {
+      const next = (prev[dateStr] || []).filter(r => r.dealerId !== dealerId);
+      return { ...prev, [dateStr]: next };
+    });
+    showToast("Removed from route.", "success");
+  };
+
+  const move = (dealerId: string, dir: "up" | "down") => {
+    setRouteByDate(prev => {
+      const arr = [...(prev[dateStr] || [])].sort((a,b)=>(a.position||0)-(b.position||0));
+      const idx = arr.findIndex(r => r.dealerId === dealerId);
+      if (idx < 0) return prev;
+      const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= arr.length) return prev;
+      const a = arr[idx], b = arr[swapIdx];
+      const tmp = a.position; a.position = b.position; b.position = tmp;
+      return { ...prev, [dateStr]: arr };
+    });
+  };
+
+  const clearDay = () => {
+    const current = routeByDate[dateStr] || [];
+    if (!current.length) return;
+    if (!confirm("Clear all stops for this day?")) return;
+    setRouteByDate(prev => ({ ...prev, [dateStr]: [] }));
+  };
+
+  const exportCSV = () => {
+    const sorted = [...sortedRoute];
+    const rows: (string | number)[][] = [["Dealer","Address1","Address2","City","State","Zip","Region"]];
+    for (const r of sorted) {
+      const d = r.dealer;
+      rows.push([d.name || "", d.address1 || "", d.address2 || "", d.city || "", d.state || "", d.zip || "", d.region || ""]);
+    }
+    const csv = rows.map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rep-route-${dateStr}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  const copyAll = async () => {
+    const lines = sortedRoute.map(r => {
+      const d = r.dealer;
+      const addr = [d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ");
+      return `${d.name} — ${addr}`;
+    });
+    await navigator.clipboard.writeText(lines.join("\n"));
+    showToast("Addresses copied.", "success");
+  };
+
+  const mapUrl = (d: Dealer) => {
+    const addr = [d.address1, d.city, d.state, d.zip].filter(Boolean).join(" ");
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
+  };
+
+  const viewDealer = (dealerId: string) => {
+    saveLS(LS_LAST_SELECTED_DEALER, dealerId);
+    setRoute("dealer-notes");
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={dateStr}
+            onChange={(e) => setDateStr(e.target.value)}
+            className="border rounded-lg px-3 py-2"
+            title="Pick a day"
+          />
+          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>Clear Day</button>
+          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>Export CSV</button>
+          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>Copy All</button>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Find your dealers</h2>
+          <span className="text-sm text-slate-500">Results: {filtered.length}</span>
+        </div>
+
+        <div className="grid md:grid-cols-4 gap-3">
+          <div className="md:col-span-2">
+            <input
+              value={q}
+              onChange={(e)=>setQ(e.target.value)}
+              placeholder="Search dealers (name, city, region)…"
+              className="w-full border rounded-lg px-3 py-2"
+            />
+          </div>
+          <select className="border rounded-lg px-3 py-2" value={state} onChange={e=>setState(e.target.value)}>
+            <option value="">All States</option>
+            {states.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="border rounded-lg px-3 py-2" value={region} onChange={e=>setRegion(e.target.value)}>
+            <option value="">All Regions</option>
+            {regions.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <select className="border rounded-lg px-3 py-2" value={city} onChange={e=>setCity(e.target.value)}>
+            <option value="">All Cities</option>
+            {cities.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+
+        {/* Search Results */}
+        <div className="mt-4 max-h-72 overflow-auto divide-y">
+          {filtered.length === 0 ? (
+            <div className="p-4 text-slate-500">No results. Try different filters.</div>
+          ) : filtered.map(d => (
+            <div key={d.id} className="flex items-center justify-between py-3">
+              <div>
+                <div className="font-medium">{d.name}</div>
+                <div className="text-sm text-slate-600">{[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}</div>
+                <div className="mt-1 text-xs text-slate-500">{d.region} • {d.state}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700" onClick={()=>addDealer(d)}>Add</button>
+                <button className="px-3 py-2 rounded-lg border" onClick={()=>viewDealer(d.id)}>View</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Route List */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Route for {dateStr}</h2>
+          <span className="text-sm text-slate-500">{sortedRoute.length} stop(s)</span>
+        </div>
+
+        {sortedRoute.length === 0 ? (
+          <div className="p-6 text-center text-slate-500">No dealers in the route yet. Add some from above.</div>
+        ) : (
+          <div className="space-y-2">
+            {sortedRoute.map((r, idx) => (
+              <div key={r.dealerId} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <div>
+                  <div className="font-semibold">{idx+1}. {r.dealer.name}</div>
+                  <div className="text-sm text-slate-600">
+                    {[r.dealer.address1, r.dealer.address2, r.dealer.city, r.dealer.state, r.dealer.zip].filter(Boolean).join(", ")}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">{r.dealer.region}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a href={mapUrl(r.dealer)} target="_blank" rel="noreferrer" className="px-3 py-2 rounded-lg border">Maps</a>
+                  <button className="px-3 py-2 rounded-lg border" onClick={()=>viewDealer(r.dealer.id)}>View</button>
+                  <button className="px-3 py-2 rounded-lg border" onClick={()=>move(r.dealerId, "up")}>&uarr;</button>
+                  <button className="px-3 py-2 rounded-lg border" onClick={()=>move(r.dealerId, "down")}>&darr;</button>
+                  <button className="px-3 py-2 rounded-lg border" onClick={()=>removeDealer(r.dealerId)}>Remove</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
