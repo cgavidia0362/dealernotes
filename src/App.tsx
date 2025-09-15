@@ -4185,258 +4185,317 @@ const ResetInviteModal: React.FC<{
 };
 /* ------------------------------- Rep Route -------------------------------- */
 
-const RepRouteView: React.FC<{
+type RepRouteViewProps = {
   session: Session;
   users: User[];
   dealers: Dealer[];
   notes: Note[];
   setRoute: (r: RouteKey) => void;
   showToast: (m: string, k?: ToastKind) => void;
-}> = ({ session, users, dealers, notes, setRoute, showToast }) => {
+};
+
+const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
+  const { session, users, dealers, notes, setRoute, showToast } = props;
+
+  // find current profile; gate to Reps only
   const me = users.find((u) => u.username === session?.username) || null;
   const isRep = session?.role === "Rep";
-
-  // Gate: reps only (Managers/Admins shouldn't land here)
   if (!isRep) {
-    return (
-      <div className="p-6 text-center text-slate-600">
-        This page is only for reps.
-      </div>
-    );
+    return <div className="p-6 text-center text-slate-600">This page is only for reps.</div>;
   }
 
-  const routeKeyForUser = (username?: string | null) =>
-    `${LS_REP_ROUTE}_${username || "anon"}`;
+  // LS key helper
+  const routeKeyForUser = (username?: string | null) => `${LS_REP_ROUTE}_${username || "anon"}`;
 
+  // types
   type RouteStop = { dealerId: string; position: number };
   type RouteByDate = Record<string, RouteStop[]>;
 
+  // state
   const [dateStr, setDateStr] = useState<string>(todayISO());
-  const [routeByDate, setRouteByDate] = useState<RouteByDate>(() =>
-    loadLS<RouteByDate>(routeKeyForUser(session?.username), {})
-  );
+  const [routeByDate, setRouteByDate] = useState<RouteByDate>({});
 
-  // Persist whenever it changes
+  // load today’s route from Supabase
   useEffect(() => {
-    saveLS(routeKeyForUser(session?.username), routeByDate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeByDate]);
+    if (!me?.id) return;
+    let isCancelled = false;
 
-  // Build accessible dealers for this rep (assignment OR coverage)
+    (async () => {
+      const { data, error } = await supabase
+        .from("dealer_routes")
+        .select("dealer_id, position")
+        .eq("user_id", me.id)
+        .eq("date", dateStr)
+        .order("position", { ascending: true });
+
+      if (error) {
+        console.error("load route error:", error);
+        return;
+      }
+      if (isCancelled) return;
+
+      const rows: RouteStop[] = (data ?? []).map((r: any) => ({
+        dealerId: r.dealer_id,
+        position: r.position ?? 1,
+      }));
+      setRouteByDate((prev) => ({ ...prev, [dateStr]: rows }));
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [dateStr, me?.id]);
+
+  // which dealers can this rep see?
   const accessibleDealers = useMemo(() => {
     if (!me) return [] as Dealer[];
     const can = (d: Dealer) => {
       const assigned = d.assignedRepUsername === me.username;
       const coversState = !!me.states?.includes?.(d.state);
-      const coversRegion =
-        !!me.regionsByState?.[d.state]?.includes?.(d.region);
+      const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
       return assigned || (coversState && coversRegion);
     };
     return dealers.filter(can);
   }, [dealers, me]);
 
-  // Filters
+  // filters
   const unique = (arr: (string | undefined)[]) =>
     Array.from(new Set(arr.filter(Boolean) as string[])).sort();
 
-  const states = useMemo(() => unique(accessibleDealers.map(d => d.state)), [accessibleDealers]);
-  const regions = useMemo(() => unique(accessibleDealers.map(d => d.region)), [accessibleDealers]);
-  const cities = useMemo(() => unique(accessibleDealers.map(d => d.city)), [accessibleDealers]);
+  const states = useMemo(() => unique(accessibleDealers.map((d) => d.state)), [accessibleDealers]);
+  const regions = useMemo(() => unique(accessibleDealers.map((d) => d.region)), [accessibleDealers]);
+  const cities = useMemo(() => unique(accessibleDealers.map((d) => d.city)), [accessibleDealers]);
 
   const [q, setQ] = useState("");
   const [state, setState] = useState("");
   const [region, setRegion] = useState("");
   const [city, setCity] = useState("");
 
+  // current route (for selected date)
   const route: RouteStop[] = routeByDate[dateStr] || [];
-  const routeIds = new Set(route.map(r => r.dealerId));
+  const routeIds = new Set(route.map((r) => r.dealerId));
 
+  // filtered search results
   const filtered = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    return accessibleDealers.filter(d => {
-      if (routeIds.has(d.id)) return false; // hide ones already in route
+    const qq = q.trim().toLowerCase();
+    return accessibleDealers.filter((d) => {
       if (state && d.state !== state) return false;
       if (region && d.region !== region) return false;
       if (city && d.city !== city) return false;
-      if (!query) return true;
-      const hay = `${d.name} ${d.city || ""} ${d.state} ${d.region}`.toLowerCase();
-      return hay.includes(query);
-    }).slice(0, 50);
-  }, [q, state, region, city, accessibleDealers, routeIds]);
+      if (!qq) return true;
+      const hay = `${d.name} ${d.city} ${d.region}`.toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [accessibleDealers, q, state, region, city]);
 
-  const sortedRoute = useMemo(() => {
-    return [...route]
-      .map(r => ({ ...r, dealer: dealers.find(d => d.id === r.dealerId) }))
-      .filter((r): r is RouteStop & { dealer: Dealer } => !!r.dealer)
-      .sort((a, b) => (a.position || 0) - (b.position || 0));
-  }, [route, dealers]);
+  // helpers
+  const saveLS = (k: string, v: any) => localStorage.setItem(k, JSON.stringify(v));
+  const loadLS = <T,>(k: string, fallback: T): T => {
+    try {
+      const s = localStorage.getItem(k);
+      return s ? (JSON.parse(s) as T) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
 
-  const addDealer = (d: Dealer) => {
-    setRouteByDate(prev => {
+  // persist route map per-user
+  useEffect(() => {
+    saveLS(routeKeyForUser(session?.username), routeByDate);
+  }, [routeByDate, session?.username]);
+
+  // add dealer to today’s route (local + supabase)
+  const addDealer = async (d: Dealer) => {
+    setRouteByDate((prev) => {
       const current = prev[dateStr] || [];
-      if (current.some(r => r.dealerId === d.id)) return prev;
-      const nextPos = current.length ? Math.max(...current.map(r => r.position || 0)) + 1 : 1;
+      if (current.some((r) => r.dealerId === d.id)) return prev;
+      const nextPos = current.length ? Math.max(...current.map((r) => r.position || 0)) + 1 : 1;
       const next = [...current, { dealerId: d.id, position: nextPos }];
       return { ...prev, [dateStr]: next };
     });
+
+    // upsert (ignore conflict via UNIQUE)
+    const { error } = await supabase
+      .from("dealer_routes")
+      .upsert(
+        {
+          user_id: me!.id,
+          dealer_id: d.id,
+          date: dateStr,
+          position: (routeByDate[dateStr]?.length || 0) + 1,
+        },
+        { onConflict: "user_id,date,dealer_id" }
+      );
+
+    if (error) {
+      console.error("add route upsert error:", error);
+      showToast("Saved locally, but sync failed. Try again.", "error");
+      return;
+    }
+
     showToast("Added to route.", "success");
   };
 
-  const removeDealer = (dealerId: string) => {
-    setRouteByDate(prev => {
-      const next = (prev[dateStr] || []).filter(r => r.dealerId !== dealerId);
+  // remove dealer
+  const removeDealer = async (dealerId: string) => {
+    setRouteByDate((prev) => {
+      const next = (prev[dateStr] || []).filter((r) => r.dealerId !== dealerId);
       return { ...prev, [dateStr]: next };
     });
+
+    const { error } = await supabase
+      .from("dealer_routes")
+      .delete()
+      .eq("user_id", me!.id)
+      .eq("date", dateStr)
+      .eq("dealer_id", dealerId);
+
+    if (error) {
+      console.error("remove route error:", error);
+      showToast("Removed locally, but sync failed.", "error");
+      return;
+    }
     showToast("Removed from route.", "success");
   };
 
-  const move = (dealerId: string, dir: "up" | "down") => {
-    setRouteByDate(prev => {
-      const arr = [...(prev[dateStr] || [])].sort((a,b)=>(a.position||0)-(b.position||0));
-      const idx = arr.findIndex(r => r.dealerId === dealerId);
-      if (idx < 0) return prev;
-      const swapIdx = dir === "up" ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= arr.length) return prev;
-      const a = arr[idx], b = arr[swapIdx];
-      const tmp = a.position; a.position = b.position; b.position = tmp;
-      return { ...prev, [dateStr]: arr };
+  // move up/down
+  const move = async (dealerId: string, dir: "up" | "down") => {
+    setRouteByDate((prev) => {
+      const curr = [...(prev[dateStr] || [])];
+      const i = curr.findIndex((r) => r.dealerId === dealerId);
+      if (i < 0) return prev;
+      const j = dir === "up" ? i - 1 : i + 1;
+      if (j < 0 || j >= curr.length) return prev;
+      [curr[i], curr[j]] = [curr[j], curr[i]];
+      // re-number positions 1..N
+      const renum = curr.map((r, idx) => ({ dealerId: r.dealerId, position: idx + 1 }));
+      return { ...prev, [dateStr]: renum };
     });
+
+    // best-effort position sync
+    const curr = routeByDate[dateStr] || [];
+    const idx = curr.findIndex((r) => r.dealerId === dealerId);
+    const targetIndex = dir === "up" ? idx - 1 : idx + 1;
+    const pair = [curr[idx]?.dealerId, curr[targetIndex]?.dealerId].filter(Boolean) as string[];
+    for (let k = 0; k < pair.length; k++) {
+      const id = pair[k];
+      // new position equals its new index + 1 after swap
+      const newPos = dir === "up" ? (id === dealerId ? idx : targetIndex) : (id === dealerId ? idx + 2 : idx + 1);
+      await supabase
+        .from("dealer_routes")
+        .update({ position: newPos })
+        .eq("user_id", me!.id)
+        .eq("date", dateStr)
+        .eq("dealer_id", id);
+    }
   };
 
-  const clearDay = () => {
+  // clear the whole day
+  const clearDay = async () => {
     const current = routeByDate[dateStr] || [];
     if (!current.length) return;
     if (!confirm("Clear all stops for this day?")) return;
-    setRouteByDate(prev => ({ ...prev, [dateStr]: [] }));
+
+    setRouteByDate((prev) => ({ ...prev, [dateStr]: [] }));
+
+    const { error } = await supabase
+      .from("dealer_routes")
+      .delete()
+      .eq("user_id", me!.id)
+      .eq("date", dateStr);
+
+    if (error) {
+      console.error("clear day error:", error);
+      showToast("Cleared locally, but sync failed.", "error");
+      return;
+    }
   };
 
+  // export + copy helpers (addresses only)
   const exportCSV = () => {
-    const sorted = [...sortedRoute];
-    const rows: (string | number)[][] = [["Dealer","Address1","Address2","City","State","Zip","Region"]];
+    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const rows: (string | number)[][] = [["Dealer", "Address1", "Address2", "City", "State", "Zip", "Region"]];
     for (const r of sorted) {
-      const d = r.dealer;
-      rows.push([d.name || "", d.address1 || "", d.address2 || "", d.city || "", d.state || "", d.zip || "", d.region || ""]);
+      const d = dealers.find((x) => x.id === r.dealerId);
+      rows.push([
+        d?.name || "",
+        d?.address1 || "",
+        d?.address2 || "",
+        d?.city || "",
+        d?.state || "",
+        d?.zip || "",
+        d?.region || "",
+      ]);
     }
-    const csv = rows.map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const csv = rows.map((row) => row.map((v) => `${String(v).replace(/"/g, '""')}`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `rep-route-${dateStr}.csv`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const copyAll = async () => {
-    const lines = sortedRoute.map(r => {
-      const d = r.dealer;
-      const addr = [d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ");
-      return `${d.name} — ${addr}`;
-    });
-    await navigator.clipboard.writeText(lines.join("\n"));
+    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const lines = sorted
+      .map((r) => {
+        const d = dealers.find((x) => x.id === r.dealerId);
+        return [d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ");
+      })
+      .join("\n");
+    await navigator.clipboard.writeText(lines);
     showToast("Addresses copied.", "success");
   };
 
-  const mapUrl = (d: Dealer) => {
-    const addr = [d.address1, d.city, d.state, d.zip].filter(Boolean).join(" ");
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
-  };
+  // navigation to a dealer’s notes page
+  // Build a Google Maps URL for a dealer address
+const mapUrl = (d: Dealer) => {
+  const q = [d.name, d.address1, d.address2, d.city, d.state, d.zip]
+    .filter(Boolean)
+    .join(", ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+};
 
   const viewDealer = (dealerId: string) => {
     saveLS(LS_LAST_SELECTED_DEALER, dealerId);
     setRoute("dealer-notes");
   };
-  // === Daily Summary state/helpers (same as Home) ===
-const isAdminManager = session?.role === "Admin" || session?.role === "Manager";
-const [dailyOpen, setDailyOpen] = useState(false);
-const [summaryRange, setSummaryRange] = useState<"today"|"yesterday"|"7d">("today");
-const [summaryRep, setSummaryRep] = useState<string>("ALL");
-const repOptions = useMemo(
-  () => users.filter(u => u.role === "Rep").map(r => ({ label: `${r.name} (${r.username})`, value: r.username })),
-  [users]
-);
 
-// tiny helpers
-const isToday = (iso: string) => {
-  const d = new Date(iso), now = new Date();
-  return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
-};
-const isYesterday = (iso: string) => {
-  const d = new Date(iso), now = new Date();
-  const y = new Date(now.getFullYear(), now.getMonth(), now.getDate()-1);
-  return d.getFullYear()===y.getFullYear() && d.getMonth()===y.getMonth() && d.getDate()===y.getDate();
-};
-const isWithin7Days = (iso: string) => {
-  const ts = new Date(iso).getTime(), now = Date.now(), seven = 7*24*60*60*1000;
-  return now - ts <= seven && ts <= now;
-};
-const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
-const dealerById = (id: string) => dealers.find(d => d.id === id);
+  // action button class (mobile-friendly)
+  const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
 
-// scoped notes (role + range + optional rep for managers)
-const summaryNotes = useMemo(() => {
-  let scoped = notes.slice();
-  const isRep = session?.role === "Rep";
-  if (isRep) {
-    scoped = scoped.filter(n => n.authorUsername === session!.username);
-  } else if (isAdminManager) {
-    if (summaryRep !== "ALL") scoped = scoped.filter(n => n.authorUsername === summaryRep);
-  }
-  if (summaryRange === "today") scoped = scoped.filter(n => isToday(n.tsISO));
-  else if (summaryRange === "yesterday") scoped = scoped.filter(n => isYesterday(n.tsISO));
-  else scoped = scoped.filter(n => isWithin7Days(n.tsISO));
-  return scoped.sort((a,b)=> (a.tsISO > b.tsISO ? -1 : 1));
-}, [notes, session, isAdminManager, summaryRep, summaryRange]);
+  // --- render ---
+  const sortedRoute = [...route].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
-const buildSummaryPlainText = () => {
-  if (summaryNotes.length === 0) return "No notes in selected range.";
-  const lines = summaryNotes.map(n => {
-    const d = dealerById(n.dealerId);
-    const where = d ? `${d.name} — ${d.region}, ${d.state}` : "(dealer removed)";
-    return `• ${fmtDateTime(n.tsISO)} | ${where} | ${n.category} | by ${n.authorUsername}: ${n.text}`;
-  });
-  return lines.join("\n");
-};
-const csvEscape = (v: unknown) => {
-  const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
-};
-const downloadCSV = (filename: string, rows: (string|number)[][]) => {
-  const csv = rows.map(r => r.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
-};
-const exportSummaryCSV = () => {
-  const rows: (string|number)[][] = [["Time","Dealer","Region","State","Category","Author","Note"]];
-  summaryNotes.forEach(n => {
-    const d = dealerById(n.dealerId);
-    rows.push([ new Date(n.tsISO).toLocaleString(), d?.name||"", d?.region||"", d?.state||"", n.category, n.authorUsername, n.text||"" ]);
-  });
-  const today = new Date().toISOString().slice(0,10);
-  const scope = session?.role === "Rep" ? session?.username : (summaryRep === "ALL" ? "all" : summaryRep);
-  downloadCSV(`daily_summary_${summaryRange}_${today}_${scope}.csv`, rows);
-};
+  // Daily Summary modal state
+  const [dailyOpen, setDailyOpen] = useState(false);
 
-// compact button classes (mobile-friendly)
-const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
+  // Precompute daily notes for this rep + date
+  const todaysDealerIds = new Set(sortedRoute.map((r) => r.dealerId));
+  const todaysNotes = useMemo(
+    () =>
+      notes.filter((n) => {
+        const d = dealers.find((x) => x.id === n.dealerId);
+        if (!d) return false;
+        if (!todaysDealerIds.has(n.dealerId)) return false;
+        // same day
+        return (n.tsISO || "").slice(0, 10) === dateStr;
+      }),
+    [notes, dealers, sortedRoute, dateStr]
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-
-{/* Title row + Daily Summary button (mobile-friendly) */}
-<div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
-  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
-  <button
-    onClick={() => setDailyOpen(true)}
-    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow text-sm"
-    title="Show notes summary"
-  >
-    📄 Daily Summary
-  </button>
-</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
         </div>
+
         <div className="flex items-center gap-2">
           <input
             type="date"
@@ -4445,9 +4504,25 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
             className="border rounded-lg px-3 py-2"
             title="Pick a day"
           />
-          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>Clear Day</button>
-          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>Export CSV</button>
-          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>Copy All</button>
+          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>
+            Clear Day
+          </button>
+          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>
+            Export CSV
+          </button>
+          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
+            Copy All
+          </button>
+
+          {/* Daily Summary inline button */}
+          <button
+            onClick={() => setDailyOpen(true)}
+            className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
+            title="Show notes summary"
+          >
+            <span className="inline-block -ml-1">📄</span>
+            Daily Summary
+          </button>
         </div>
       </div>
 
@@ -4462,43 +4537,66 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
           <div className="md:col-span-2">
             <input
               value={q}
-              onChange={(e)=>setQ(e.target.value)}
+              onChange={(e) => setQ(e.target.value)}
               placeholder="Search dealers (name, city, region)…"
               className="w-full border rounded-lg px-3 py-2"
             />
           </div>
-          <select className="border rounded-lg px-3 py-2" value={state} onChange={e=>setState(e.target.value)}>
+
+          <select className="border rounded-lg px-3 py-2" value={state} onChange={(e) => setState(e.target.value)}>
             <option value="">All States</option>
-            {states.map(s => <option key={s} value={s}>{s}</option>)}
+            {states.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
           </select>
-          <select className="border rounded-lg px-3 py-2" value={region} onChange={e=>setRegion(e.target.value)}>
+
+          <select className="border rounded-lg px-3 py-2" value={region} onChange={(e) => setRegion(e.target.value)}>
             <option value="">All Regions</option>
-            {regions.map(r => <option key={r} value={r}>{r}</option>)}
+            {regions.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
           </select>
-          <select className="border rounded-lg px-3 py-2" value={city} onChange={e=>setCity(e.target.value)}>
+
+          <select className="border rounded-lg px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)}>
             <option value="">All Cities</option>
-            {cities.map(c => <option key={c} value={c}>{c}</option>)}
+            {cities.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
           </select>
         </div>
 
-        {/* Search Results */}
-        <div className="mt-4 max-h-72 overflow-auto divide-y">
-          {filtered.length === 0 ? (
-            <div className="p-4 text-slate-500">No results. Try different filters.</div>
-          ) : filtered.map(d => (
-            <div key={d.id} className="flex items-center justify-between py-3">
+        {filtered.length === 0 && (
+          <div className="p-6 text-center text-slate-500">No results. Try different filters.</div>
+        )}
+      </div>
+
+      {/* Search Results */}
+      <div className="space-y-2">
+        {filtered.map((d) => {
+          const inRoute = routeIds.has(d.id);
+          return (
+            <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
               <div>
-                <div className="font-medium">{d.name}</div>
-                <div className="text-sm text-slate-600">{[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}</div>
-                <div className="mt-1 text-xs text-slate-500">{d.region} • {d.state}</div>
+                <div className="font-semibold">{d.name}</div>
+                <div className="text-sm text-slate-600">
+                  {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
+                </div>
+                <div className="text-xs text-slate-500">{d.region}</div>
               </div>
-              <div className="flex items-center gap-2">
-                <button className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700" onClick={()=>addDealer(d)}>Add</button>
-                <button className="px-3 py-2 rounded-lg border" onClick={()=>viewDealer(d.id)}>View</button>
+              <div className="flex gap-2">
+                <button className={`${actionBtn}`} disabled={inRoute} onClick={() => addDealer(d)}>
+                  {inRoute ? "Added" : "Add"}
+                </button>
               </div>
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       {/* Route List */}
@@ -4512,111 +4610,82 @@ const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:te
           <div className="p-6 text-center text-slate-500">No dealers in the route yet. Add some from above.</div>
         ) : (
           <div className="space-y-2">
-            {sortedRoute.map((r, idx) => (
-             <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
-                <div>
-                  <div className="font-semibold">{idx+1}. {r.dealer.name}</div>
-                  <div className="text-sm text-slate-600">
-                    {[r.dealer.address1, r.dealer.address2, r.dealer.city, r.dealer.state, r.dealer.zip].filter(Boolean).join(", ")}
+            {sortedRoute.map((r, idx) => {
+              const d = dealers.find((x) => x.id === r.dealerId);
+              return (
+                <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <div>
+                    <div className="font-semibold">{idx + 1}. {d?.name || "(dealer removed)"}</div>
+                    <div className="text-sm text-slate-600">
+                      {[d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ")}
+                    </div>
+                    <div className="text-xs text-slate-500">{d?.region || ""}</div>
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">{r.dealer.region}</div>
+
+                  <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
+                    <a
+                      href={d ? mapUrl(d) : "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`${actionBtn}`}
+                    >
+                      Maps
+                    </a>
+                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
+                    <button className={actionBtn} onClick={() => move(r.dealerId, "up")}>&uarr;</button>
+                    <button className={actionBtn} onClick={() => move(r.dealerId, "down")}>&darr;</button>
+                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2 w-full md:w-auto md:justify-end">
-                <a href={mapUrl(r.dealer)} target="_blank" rel="noreferrer" className={actionBtn}>Maps</a>
-<button className={actionBtn} onClick={()=>viewDealer(r.dealer.id)}>View</button>
-<button className={actionBtn} onClick={()=>move(r.dealerId, "up")}>&uarr;</button>
-<button className={actionBtn} onClick={()=>move(r.dealerId, "down")}>&darr;</button>
-<button className={actionBtn} onClick={()=>removeDealer(r.dealerId)}>Remove</button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
-      {/* Daily Summary Modal (Rep + Admin/Manager) */}
-{dailyOpen && (
-  <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
-    {/* Controls */}
-    <div className="flex flex-col md:flex-row md:items-end gap-3 mb-3">
-      <div className="flex items-center gap-2">
-        <label className="text-xs text-slate-600">Range:</label>
-        <SelectField
-          label="Range"
-          value={summaryRange}
-          onChange={(v) => setSummaryRange(v as "today" | "yesterday" | "7d")}
-          options={[
-            { label: "Today", value: "today" },
-            { label: "Yesterday", value: "yesterday" },
-            { label: "Last 7 Days", value: "7d" },
-          ]}
-        />
-      </div>
 
-      {isAdminManager && (
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-600">Rep:</label>
-          <SelectField
-            label="Rep"
-            value={summaryRep}
-            onChange={(v) => setSummaryRep(v)}
-            options={[{ label: "All Reps", value: "ALL" }, ...repOptions]}
-          />
-        </div>
-      )}
-
-      <div className="ml-auto flex items-center gap-2">
-        <button
-          className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
-          onClick={() => {
-            navigator.clipboard.writeText(buildSummaryPlainText());
-            showToast("Summary copied.", "success");
-          }}
-        >
-          Copy All
-        </button>
-        <button
-          className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
-          onClick={exportSummaryCSV}
-        >
-          Export CSV
-        </button>
-      </div>
-    </div>
-
-    {/* List */}
-    <div className="space-y-3">
-      {summaryNotes.length === 0 && (
-        <div className="text-sm text-slate-500">No notes in selected range.</div>
-      )}
-      {summaryNotes.map((n) => {
-        const d = dealerById(n.dealerId);
-        return (
-          <div key={n.id} className="border rounded-lg p-3">
-            <div className="text-xs text-slate-500 mb-1">{fmtDateTime(n.tsISO)}</div>
-            <div className="text-sm font-medium text-slate-800">{d ? d.name : "(dealer removed)"}</div>
-            <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
-            <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
-              {n.category}
+      {/* Daily Summary modal */}
+      {dailyOpen && (
+        <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
+          <div className="space-y-3">
+            <div className="text-sm text-slate-600">
+              Showing notes for <span className="font-semibold">{dateStr}</span> for the dealers in your route.
             </div>
-            <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
-            <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
-          </div>
-        );
-      })}
-    </div>
 
-    <div className="mt-4 flex items-center justify-end">
-      <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
-        Close
-      </button>
-    </div>
-  </Modal>
-)}
+            <div className="divide-y">
+              {todaysNotes.length === 0 && (
+                <div className="p-4 text-center text-slate-500">No notes for today.</div>
+              )}
+
+              {todaysNotes.map((n) => {
+                const d = dealers.find((x) => x.id === n.dealerId);
+                return (
+                  <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
+                    <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
+                    <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
+                    <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
+                      {n.category}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
+                    <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 flex items-center justify-end">
+              <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
 
 /* ---------------------------- User Management ----------------------------- */
+
 
 const UserManagementView: React.FC<{
   users: User[];
@@ -5972,5 +6041,4 @@ const confirmImportDealers = async () => {
     </div>
   );
 };
-
 export default App;
