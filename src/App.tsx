@@ -4475,14 +4475,40 @@ const mapUrl = (d: Dealer) => {
 
   // Precompute daily notes for this rep + date
   const todaysDealerIds = new Set(sortedRoute.map((r) => r.dealerId));
+  // Summary range (like Home): today / yesterday / last 7 days (relative to dateStr)
+const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7">("today");
+
+// Compute start/end labels (string-based so we can compare with YYYY-MM-DD)
+const { startStr, endStr, rangeLabel } = useMemo(() => {
+  const addDaysStr = (isoDate: string, delta: number) => {
+    const d = new Date(`${isoDate}T00:00:00`);
+    d.setDate(d.getDate() + delta);
+    return d.toISOString().slice(0, 10);
+  };
+
+  if (summaryRange === "yesterday") {
+    const y = addDaysStr(dateStr, -1);
+    return { startStr: y, endStr: y, rangeLabel: y };
+  }
+
+  if (summaryRange === "7") {
+    const start = addDaysStr(dateStr, -6); // inclusive 7 days, end = dateStr
+    return { startStr: start, endStr: dateStr, rangeLabel: `${start} – ${dateStr}` };
+  }
+
+  // today
+  return { startStr: dateStr, endStr: dateStr, rangeLabel: dateStr };
+}, [dateStr, summaryRange]);
+
   const todaysNotes = useMemo(
     () =>
       notes.filter((n) => {
         const d = dealers.find((x) => x.id === n.dealerId);
         if (!d) return false;
         if (!todaysDealerIds.has(n.dealerId)) return false;
-        // same day
-        return (n.tsISO || "").slice(0, 10) === dateStr;
+// in selected range (string compare works for YYYY-MM-DD)
+const day = (n.tsISO || "").slice(0, 10);
+return day >= startStr && day <= endStr;
       }),
     [notes, dealers, sortedRoute, dateStr]
   );
@@ -4688,17 +4714,32 @@ const exportDailySummaryCSV = () => {
           <div className="space-y-4">
   {/* Bar: date + actions (Copy / Export) */}
   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-    <div className="text-sm text-slate-600">
-      Showing notes for <span className="font-semibold">{dateStr}</span>
-    </div>
-    <div className="flex items-center gap-2">
-      <button className="px-3 py-2 rounded-lg border" onClick={copyDailySummary}>
-        Copy
-      </button>
-      <button className="px-3 py-2 rounded-lg border" onClick={exportDailySummaryCSV}>
-        Export CSV
-      </button>
-    </div>
+  <div className="flex items-center gap-3 flex-wrap">
+  <div className="text-sm text-slate-600">
+    Showing notes for <span className="font-semibold">{rangeLabel}</span>
+  </div>
+
+  {/* Range selector (same behavior as Home) */}
+  <select
+    className="border rounded-lg px-2 py-1 text-sm"
+    value={summaryRange}
+    onChange={(e) => setSummaryRange(e.target.value as "today" | "yesterday" | "7")}
+    title="Choose range"
+  >
+    <option value="today">Today</option>
+    <option value="yesterday">Yesterday</option>
+    <option value="7">Last 7 days</option>
+  </select>
+</div>
+
+<div className="flex items-center gap-2">
+  <button className="px-3 py-2 rounded-lg border" onClick={copyDailySummary}>
+    Copy
+  </button>
+  <button className="px-3 py-2 rounded-lg border" onClick={exportDailySummaryCSV}>
+    Export CSV
+  </button>
+</div>
   </div>
 
   {/* Notes list */}
