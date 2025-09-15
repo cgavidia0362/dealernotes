@@ -4486,14 +4486,63 @@ const mapUrl = (d: Dealer) => {
       }),
     [notes, dealers, sortedRoute, dateStr]
   );
+// Copy today's notes (same behavior as Home)
+const copyDailySummary = async () => {
+  const lines = todaysNotes
+    .map(n => {
+      const d = dealers.find(x => x.id === n.dealerId);
+      const when = (n.tsISO || "").slice(11, 16); // HH:MM
+      return `• ${d?.name ?? "Unknown"} (${d?.region ?? ""}, ${d?.state ?? ""}) — ${n.category} by ${n.authorUsername}${when ? ` at ${when}` : ""}\n  ${n.text}`;
+    })
+    .join("\n\n");
 
+  await navigator.clipboard.writeText(lines || `No notes for ${dateStr}.`);
+  showToast("Summary copied.", "success");
+};
+
+// Export today's notes to CSV (same behavior as Home)
+const exportDailySummaryCSV = () => {
+  const rows: (string | number)[][] = [
+    ["Date","Dealer","Region","State","Category","Author","Note"]
+  ];
+  for (const n of todaysNotes) {
+    const d = dealers.find(x => x.id === n.dealerId);
+    rows.push([
+      dateStr,
+      d?.name || "",
+      d?.region || "",
+      d?.state || "",
+      n.category || "",
+      n.authorUsername || "",
+      (n.text || "").replace(/\n/g, " ")
+    ]);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `daily-summary-${dateStr}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+<div className="flex items-center gap-2 flex-wrap">
+  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+  <button
+    onClick={() => setDailyOpen(true)}
+    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
+    title="Show notes summary"
+  >
+    <span className="inline-block -ml-1">📄</span>
+    Daily Summary
+  </button>
+</div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -4512,16 +4561,6 @@ const mapUrl = (d: Dealer) => {
           </button>
           <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
             Copy All
-          </button>
-
-          {/* Daily Summary inline button */}
-          <button
-            onClick={() => setDailyOpen(true)}
-            className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-            title="Show notes summary"
-          >
-            <span className="inline-block -ml-1">📄</span>
-            Daily Summary
           </button>
         </div>
       </div>
@@ -4646,38 +4685,53 @@ const mapUrl = (d: Dealer) => {
       {/* Daily Summary modal */}
       {dailyOpen && (
         <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
-          <div className="space-y-3">
-            <div className="text-sm text-slate-600">
-              Showing notes for <span className="font-semibold">{dateStr}</span> for the dealers in your route.
-            </div>
+          <div className="space-y-4">
+  {/* Bar: date + actions (Copy / Export) */}
+  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+    <div className="text-sm text-slate-600">
+      Showing notes for <span className="font-semibold">{dateStr}</span>
+    </div>
+    <div className="flex items-center gap-2">
+      <button className="px-3 py-2 rounded-lg border" onClick={copyDailySummary}>
+        Copy
+      </button>
+      <button className="px-3 py-2 rounded-lg border" onClick={exportDailySummaryCSV}>
+        Export CSV
+      </button>
+    </div>
+  </div>
 
-            <div className="divide-y">
-              {todaysNotes.length === 0 && (
-                <div className="p-4 text-center text-slate-500">No notes for today.</div>
-              )}
+  {/* Notes list */}
+  <div className="divide-y">
+    {todaysNotes.length === 0 && (
+      <div className="p-4 text-center text-slate-500">No notes for today.</div>
+    )}
 
-              {todaysNotes.map((n) => {
-                const d = dealers.find((x) => x.id === n.dealerId);
-                return (
-                  <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
-                    <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
-                    <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
-                    <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
-                      {n.category}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
-                    <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-4 flex items-center justify-end">
-              <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
-                Close
-              </button>
-            </div>
+    {todaysNotes.map((n) => {
+      const d = dealers.find((x) => x.id === n.dealerId);
+      return (
+        <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
+          <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
+          <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
+          <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
+            {n.category}
           </div>
+          <div className="text-[11px] text-slate-500 mb-1">
+            by {n.authorUsername} {(n.tsISO || "").slice(11,16)}
+          </div>
+          <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
+        </div>
+      );
+    })}
+  </div>
+
+  {/* Close */}
+  <div className="mt-4 flex items-center justify-end">
+    <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
+      Close
+    </button>
+  </div>
+</div>
         </Modal>
       )}
     </div>
