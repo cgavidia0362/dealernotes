@@ -4282,7 +4282,7 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
       if (state && d.state !== state) return false;
       if (region && d.region !== region) return false;
       if (city && d.city !== city) return false;
-      if (!qq) return true;
+      if (qq.length < 2) return false;
       const hay = `${d.name} ${d.city} ${d.region}`.toLowerCase();
       return hay.includes(qq);
     });
@@ -4595,7 +4595,9 @@ const exportDailySummaryCSV = () => {
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">Find your dealers</h2>
-          <span className="text-sm text-slate-500">Results: {filtered.length}</span>
+          <span className="text-sm text-slate-500">
+  {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
+</span>
         </div>
 
         <div className="grid md:grid-cols-4 gap-3">
@@ -4637,8 +4639,12 @@ const exportDailySummaryCSV = () => {
         </div>
 
         {filtered.length === 0 && (
-          <div className="p-6 text-center text-slate-500">No results. Try different filters.</div>
-        )}
+  <div className="p-6 text-center text-slate-500">
+    {q.trim().length < 2
+      ? "Start typing to search (min 2 letters)."
+      : "No results. Try different filters."}
+  </div>
+)}
       </div>
 
       {/* Search Results */}
