@@ -703,6 +703,117 @@ const DealerSearchView: React.FC<{
   const [dailyOpen, setDailyOpen] = useState(false);
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
   const [summaryRep, setSummaryRep] = useState<string>("ALL"); // Admin/Manager only: "ALL" or username
+// Data fetched from Supabase for the Daily Summary (Home)
+const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
+const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
+const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
+// Fetch Daily Summary notes from Supabase whenever the modal opens or filters change
+useEffect(() => {
+  if (!dailyOpen) return;
+
+  // Compute [start, endExclusive] in UTC based on range
+  const now = new Date();
+  const startOfToday = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0
+  ));
+
+  let start = startOfToday;                    // inclusive
+  let endExclusive = new Date(startOfToday);   // exclusive
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow 00:00Z
+
+  if (summaryRange === "yesterday") {
+    start = new Date(startOfToday);
+    start.setUTCDate(start.getUTCDate() - 1);      // yesterday 00:00Z
+    endExclusive = new Date(startOfToday);         // today 00:00Z
+  } else if (summaryRange === "7d") {
+    start = new Date(startOfToday);
+    start.setUTCDate(start.getUTCDate() - 6);      // last 7 days inclusive
+    endExclusive = new Date(startOfToday);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow
+  }
+
+  const startISO = start.toISOString();
+  const endISO = endExclusive.toISOString();
+
+  // Build a nice label like "YYYY-MM-DD" or "YYYY-MM-DD – YYYY-MM-DD"
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  setHomeRangeLabel(
+    summaryRange === "7d" ? `${fmt(start)} – ${fmt(new Date(startOfToday))}` : fmt(start)
+  );
+
+  // Build query
+  setLoadingHomeSummary(true);
+  let q = supabase
+    .from("dealer_notes")
+    .select("id,dealer_id,author_username,created_at,category,text")
+    .gte("created_at", startISO)
+    .lt("created_at", endISO)
+    .order("created_at", { ascending: false });
+
+  // Reps see their own (RLS also applies). Admin/Manager can filter by rep.
+  if (isRep) {
+    q = q.eq("author_username", session!.username);
+  } else if (isAdminManager && summaryRep !== "ALL") {
+    q = q.eq("author_username", summaryRep);
+  }
+
+  (async () => {
+    const { data, error } = await q;
+    if (error) {
+      console.error("Daily Summary fetch failed:", error);
+      setHomeSummaryNotes([]);
+    } else {
+      const mapped: Note[] = (data || []).map((r: any) => ({
+        id: String(r.id),
+        dealerId: r.dealer_id,
+        authorUsername: r.author_username,
+        tsISO: new Date(r.created_at).toISOString(),
+        category: r.category,
+        text: r.text,
+      }));
+      setHomeSummaryNotes(mapped);
+    }
+    setLoadingHomeSummary(false);
+  })();
+}, [dailyOpen, summaryRange, summaryRep, isRep, isAdminManager, session?.username]);
+// Copy Home summary (uses fetched homeSummaryNotes)
+const copyHomeDailySummary = async () => {
+  const lines = homeSummaryNotes
+    .map((n) => {
+      const d = dealers.find((x) => x.id === n.dealerId);
+      const when = (n.tsISO || "").slice(0, 16).replace("T", " "); // YYYY-MM-DD HH:MM
+      return `• ${d?.name ?? "Unknown"} (${d?.region ?? ""}, ${d?.state ?? ""}) — ${n.category} by ${n.authorUsername} at ${when}\n  ${n.text}`;
+    })
+    .join("\n\n");
+
+  await navigator.clipboard.writeText(lines || `No notes for ${homeRangeLabel}.`);
+  showToast("Summary copied.", "success");
+};
+
+// Export Home summary to CSV (uses fetched homeSummaryNotes)
+const exportHomeDailySummaryCSV = () => {
+  const rows: (string | number)[][] = [["When","Dealer","Region","State","Category","Author","Note"]];
+  for (const n of homeSummaryNotes) {
+    const d = dealers.find((x) => x.id === n.dealerId);
+    rows.push([
+      (n.tsISO || "").replace("T", " ").slice(0, 16),
+      d?.name || "",
+      d?.region || "",
+      d?.state || "",
+      n.category || "",
+      n.authorUsername || "",
+      (n.text || "").replace(/\n/g, " "),
+    ]);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `daily-summary-home-${homeRangeLabel.replace(/[^0-9A-Za-z-]/g,"_")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
 
   // helpers
   const repOptions = users.filter((u) => u.role === "Rep");
@@ -1385,69 +1496,86 @@ const paged = useMemo(() => {
         <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
           {/* Controls */}
           <div className="flex flex-col md:flex-row md:items-end gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-600">Range:</label>
-              <SelectField
-  label="Range"
-  value={summaryRange}
-  onChange={(v) => setSummaryRange(v as "today" | "yesterday" | "7d")}
-  options={[
-    { label: "Today", value: "today" },
-    { label: "Yesterday", value: "yesterday" },
-    { label: "Last 7 Days", value: "7d" },
-  ]}
-/>
-            </div>
-            {isAdminManager && (
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-600">Rep:</label>
-                <SelectField
-  label="Rep"
-  value={summaryRep}
-  onChange={(v) => setSummaryRep(v)}
-  options={[
-    { label: "All Reps", value: "ALL" },
-    ...repOptions.map((r) => ({
-      label: `${r.name} (${r.username})`,
-      value: r.username,
-    })),
-  ]}
-/>
-              </div>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
-                onClick={() => {
-                  navigator.clipboard.writeText(buildSummaryPlainText());
-                  showToast("Summary copied.", "success");
-                }}
-              >
-                Copy All
-              </button>
-              <button className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={exportSummaryCSV}>
-                Export CSV
-              </button>
-            </div>
-          </div>
+  {/* Range */}
+  <div className="flex items-center gap-2">
+    <label className="text-xs text-slate-600">Range:</label>
+    <select
+      className="border rounded-lg px-2 py-1"
+      value={summaryRange}
+      onChange={(e) => setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d')}
+    >
+      <option value="today">Today</option>
+      <option value="yesterday">Yesterday</option>
+      <option value="7d">Last 7 Days</option>
+    </select>
+  </div>
 
-          {/* List */}
-          <div className="space-y-3">
-            {summaryNotes.length === 0 && <div className="text-sm text-slate-500">No notes in selected range.</div>}
-            {summaryNotes.map((n) => {
-              const d = dealerById(n.dealerId);
-              return (
-                <div key={n.id} className="border rounded-lg p-3">
-                  <div className="text-xs text-slate-500 mb-1">{fmtDateTime(n.tsISO)}</div>
-                  <div className="text-sm font-medium text-slate-800">{d ? d.name : "(dealer removed)"}</div>
-                  <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
-                  <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">{n.category}</div>
-                  <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
-                  <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
-                </div>
-              );
-            })}
-          </div>
+  {/* Rep filter (Admin/Manager only) */}
+  {(session?.role === 'Admin' || session?.role === 'Manager') && (
+    <div className="flex items-center gap-2">
+      <label className="text-xs text-slate-600">Rep:</label>
+      <select
+        className="border rounded-lg px-2 py-1"
+        value={summaryRep}
+        onChange={(e) => setSummaryRep(e.target.value)}
+      >
+        <option value="ALL">All</option>
+        {Array.from(new Set((users || []).map(u => u.username))).sort().map(u => (
+          <option key={u} value={u}>{u}</option>
+        ))}
+      </select>
+    </div>
+  )}
+
+  {/* Buttons + "Showing" label (right side) */}
+  <div className="ml-auto flex items-center gap-2">
+    <div className="text-xs text-slate-500">
+      Showing: {homeRangeLabel}
+      {(session?.role === 'Admin' || session?.role === 'Manager') && summaryRep !== 'ALL' ? ` • ${summaryRep}` : ''}
+    </div>
+    <button
+      className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
+      onClick={copyHomeDailySummary}
+    >
+      Copy All
+    </button>
+    <button
+      className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+      onClick={exportHomeDailySummaryCSV}
+    >
+      Export CSV
+    </button>
+  </div>
+</div>
+
+{/* List */}
+<div className="space-y-3">
+  {loadingHomeSummary && (
+    <div className="text-sm text-slate-500">Loading…</div>
+  )}
+  {!loadingHomeSummary && homeSummaryNotes.length === 0 && (
+    <div className="text-sm text-slate-500">No notes in selected range.</div>
+  )}
+  {!loadingHomeSummary && homeSummaryNotes.map((n) => {
+    const d = dealerById(n.dealerId);
+    return (
+      <div key={n.id} className="border rounded-lg p-3">
+        <div className="text-xs text-slate-500 mb-1">{fmtDateTime(n.tsISO)}</div>
+        <div className="text-sm font-medium text-slate-800">
+          {d ? d.name : "(dealer removed)"}
+        </div>
+        <div className="text-xs text-slate-500 mb-1">
+          {d ? `${d.region}, ${d.state}` : ""}
+        </div>
+        <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
+          {n.category}
+        </div>
+        <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
+        <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
+      </div>
+    );
+  })}
+</div>
 
           <div className="mt-4 flex items-center justify-end">
             <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
