@@ -5572,7 +5572,7 @@ const handleImportDealers = async (file?: File | null) => {
       valid.push({
         name,
         state,
-        region: region || null,
+        region: region || "Unknown",
         type: type || "Independent",
         status: status || "Active",
         address1: address1 ? address1 : null,
