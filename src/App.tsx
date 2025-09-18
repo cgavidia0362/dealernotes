@@ -4589,11 +4589,13 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     const lines = sorted
       .map((r) => {
         const d = dealers.find((x) => x.id === r.dealerId);
-        return [d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ");
+        return [d?.name, d?.address1, d?.address2, d?.city, d?.state, d?.zip]
+        .filter(Boolean)
+        .join(", ");
       })
       .join("\n");
     await navigator.clipboard.writeText(lines);
-    showToast("Addresses copied.", "success");
+    showToast("Route (name + address) copied.", "success");
   };
 
   // navigation to a dealer’s notes page
