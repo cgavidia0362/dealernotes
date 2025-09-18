@@ -1998,37 +1998,55 @@ const addNote = async () => {
     setNoteText("");
 
     // 3) Manager-note behavior: also create a Task for the rep
-    if (noteCategory === "Manager" && canUseManagerNote) {
-      const repUser = dealer.assignedRepUsername || session!.username;
-      if (repUser) {
-        const t: Task = {
-          id: uid(),
-          dealerId: dealer.id,
-          repUsername: repUser,
-          text: dealer.name,
-          createdAtISO: new Date().toISOString(),
-        };
+  // 3) Manager-note behavior: also create a Task for the rep
+if (noteCategory === "Manager" && canUseManagerNote) {
+  const repUser = dealer.assignedRepUsername || session!.username;
+  if (repUser) {
+    // Guard: dealer.id must be a real UUID or Postgres will reject it
+    const isUUID = /^[0-9a-fA-F-]{36}$/.test(dealer.id);
+    if (!isUUID) {
+      showToast("This dealer isn’t synced yet. Save the dealer first, then add a Manager Note to create a task.", "error");
+    } else {
+      // Optimistic UI with a temporary id; we’ll replace it with the DB UUID after insert
+      const tempId = `tmp_${Date.now()}`;
+      const t: Task = {
+        id: tempId,
+        dealerId: dealer.id,
+        repUsername: repUser,
+        text: dealer.name,
+        createdAtISO: new Date().toISOString(),
+      };
 
-        // Optimistic UI
-        setTasks((prev) => [t, ...prev]);
+      // Optimistic UI
+      setTasks((prev) => [t, ...prev]);
 
-        // Persist in Supabase
-        const { error: taskErr } = await supabase.from("dealer_tasks").insert({
-          id: t.id,
+      // Persist in Supabase — let Postgres generate the UUID (don’t send our own id)
+      const { data: tRow, error: taskErr } = await supabase
+        .from("dealer_tasks")
+        .insert({
           dealer_id: t.dealerId,
           rep_username: t.repUsername,
           text: t.text,
           created_at: t.createdAtISO,
-        });
+        })
+        .select("id,dealer_id,rep_username,text,created_at,completed_at")
+        .single();
 
-        if (taskErr) {
-          setTasks((prev) => prev.filter((x) => x.id !== t.id));
-          showToast(taskErr.message || "Could not create task", "error");
-        } else {
-          showToast("Task created for the rep.", "success");
-        }
+      if (taskErr) {
+        // Roll back optimistic add
+        setTasks((prev) => prev.filter((x) => x.id !== tempId));
+        showToast(taskErr.message || "Could not create task", "error");
+      } else if (tRow) {
+        // Replace the temp id with the real DB UUID so Complete works reliably
+        const realId = String((tRow as any).id);
+        setTasks((prev) =>
+          prev.map((x) => (x.id === tempId ? { ...x, id: realId } : x))
+        );
+        showToast("Task created for the rep.", "success");
       }
     }
+  }
+}
 
     // 4) All good
     showToast("Note added.", "success");
