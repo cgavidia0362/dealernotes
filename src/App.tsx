@@ -5157,20 +5157,30 @@ const saveUser = async () => {
           .eq("id", editingId);
         if (error) throw error;
       } else {
-        // Fallback: update by email and learn their id
-        const { data, error } = await supabase
-          .from("profiles")
-          .update({
-            username: draft.username,
-            email: emailForProfile || null,
-            role: draft.role,
-            status: chosenStatus,
-          })
-          .eq("email", emailForProfile)
-          .select("id")
-          .single();
-        if (error) throw error;
-        targetUserId = (data as any)?.id ?? null;
+   // Fallback: update by email and learn their id (tolerant of 0 rows)
+const { data, error, status } = await supabase
+.from("profiles")
+.update({
+  username: draft.username,
+  email: emailForProfile || null,
+  role: draft.role,
+  status: chosenStatus,
+})
+.eq("email", emailForProfile)
+.select("id")
+.maybeSingle(); // ← don’t throw on 0 rows
+
+if (error) {
+// If PostgREST hints multiple rows, tell the admin (shouldn’t happen after uniqueness)
+showToast(error.message || "Profile update failed (email not unique?)", "error");
+} else if (!data) {
+// 0 rows updated: likely the invited user hasn’t created a profile yet
+// That’s OK. We’ll skip coverage for now; it will be saved after first login.
+showToast("User invited. Profile will appear after first login.", "success");
+targetUserId = null;
+} else {
+targetUserId = (data as any)?.id ?? null;
+}
       }
     }
 
