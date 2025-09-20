@@ -4001,7 +4001,34 @@ const u =
   onChange={() => {}}
   disabled
 />
-
+{/* Trouble helper: resend a secure reset email */}
+<div className="rounded-lg border p-3 bg-slate-50 text-slate-700">
+  <div className="text-xs mb-2">
+    Having trouble? We can resend a secure reset link to your email.
+  </div>
+  <button
+    type="button"
+    className="px-3 py-1.5 rounded-lg border hover:bg-white"
+    onClick={async () => {
+      let email = (resetEmail || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) {
+        const typed = window.prompt("Type your email to resend the secure reset link:");
+        if (!typed) return;
+        email = typed.trim().toLowerCase();
+      }
+      try {
+        const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) throw error;
+        showToast("Secure reset email sent.", "success");
+      } catch (e: any) {
+        showToast(e?.message || "Could not send reset email.", "error");
+      }
+    }}
+  >
+    Resend secure reset email
+  </button>
+</div>
       <TextField
         label="New Password"
         type="password"
