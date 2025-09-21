@@ -4988,6 +4988,51 @@ const UserManagementView: React.FC<{
     a.click();
     URL.revokeObjectURL(url);
   };
+// ---- Export Everything (ZIP) ----
+const [exportingAll, setExportingAll] = useState(false);
+
+async function exportEverythingZip() {
+  try {
+    setExportingAll(true);
+    // get current Supabase access token so the API knows who we are
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) {
+      showToast("Please log in again.", "error");
+      setExportingAll(false);
+      return;
+    }
+
+    const resp = await fetch("/api/export-everything", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!resp.ok) {
+      let msg = "Export failed.";
+      try { const j = await resp.json(); if (j?.error) msg = j.error; } catch {}
+      showToast(msg, "error");
+      setExportingAll(false);
+      return;
+    }
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+    a.download = `dealernotes-export_${stamp}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("Export ready.", "success");
+  } catch (e: any) {
+    showToast(e?.message || "Export failed.", "error");
+  } finally {
+    setExportingAll(false);
+  }
+}
 
   // ---------- Status & auth side-maps ----------
   const [statusMap, setStatusMap] = useState<Record<string, "Active" | "Inactive">>(() => loadLS(LS_USER_STATUS, {}));
@@ -5924,15 +5969,18 @@ const confirmImportDealers = async () => {
         )}
       </Card>
 
-      {/* Export quick actions (unchanged) */}
-      <div className="flex flex-wrap gap-2">
-        <button className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={exportAll}>
-          Export All Dealers
-        </button>
-        <button className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={exportAllNotes}>
-          Export All Notes
-        </button>
-        <span className="relative inline-block">
+     {/* Export quick actions */}
+     <div className="flex flex-wrap gap-2">
+     <button
+  className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
+  onClick={exportEverythingZip}
+  disabled={exportingAll}
+  type="button"
+  title="Download all tables (CSV) inside one .zip"
+>
+  {exportingAll ? "Exporting…" : "Export Everything"}
+</button>
+<span className="relative inline-block">
   {/* Hidden file input used by the Import button */}
   <input
     ref={fileInputRef}
@@ -5941,13 +5989,14 @@ const confirmImportDealers = async () => {
     className="hidden"
     onChange={(e) => {
       const f = e.target.files?.[0];
-      if (f) handleImportDealers(f);   // parse -> preview modal
-      e.currentTarget.value = "";      // lets you re-select the same file later
+      if (f) handleImportDealers(f); // parse -> preview modal
+      e.currentTarget.value = "";    // lets you re-select the same file later
     }}
   />
   <button
     className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
     onClick={() => fileInputRef.current?.click()}
+    type="button"
   >
     Import Dealers (CSV)
   </button>
