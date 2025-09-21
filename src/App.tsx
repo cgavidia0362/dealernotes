@@ -3567,7 +3567,7 @@ useEffect(() => {
       // 1) Load basic user profiles
       const { data: profiles, error: pErr } = await supabase
         .from('profiles')
-        .select('id, username, email, role, status')          // ← no name, no phone
+        .select('id, username, email, role, status, name, phone')         // ← no name, no phone
 .order('username', { ascending: true });              // ← sort by username, not name
 
       if (pErr) throw pErr;
@@ -5210,14 +5210,15 @@ const saveUser = async () => {
     if (emailForProfile) {
       if (isUUID) {
         const { error } = await supabase
-          .from("profiles")
-          .update({
-            username: draft.username,
-            email: emailForProfile || null,
-            role: draft.role,
-            status: chosenStatus,
-          })
-          .eq("id", editingId);
+        .from("profiles")
+        .update({
+          username: draft.username,
+          email: emailForProfile || null,
+          role: draft.role,
+          status: chosenStatus,
+          name: draft.name,            // <-- add this line
+        })
+        .eq("id", editingId);        
         if (error) throw error;
       } else {
    // Fallback: update by email and learn their id (tolerant of 0 rows)
@@ -5228,10 +5229,11 @@ const { data, error, status } = await supabase
   email: emailForProfile || null,
   role: draft.role,
   status: chosenStatus,
+  name: draft.name,            // <-- add this line
 })
 .eq("email", emailForProfile)
 .select("id")
-.maybeSingle(); // ← don’t throw on 0 rows
+.maybeSingle();
 
 if (error) {
 // If PostgREST hints multiple rows, tell the admin (shouldn’t happen after uniqueness)
@@ -5813,7 +5815,7 @@ const confirmImportDealers = async () => {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} className="border-t odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white">
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.name}</td>
+                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.name?.trim() || u.username}</td>
                   <td className="py-1.5 px-2 md:py-2 md:px-3">{u.username}</td>
                   <td className="py-1.5 px-2 md:py-2 md:px-3">{u.phone || "—"}</td>
                   <td className="py-1.5 px-2 md:py-2 md:px-3">{u.role}</td>
