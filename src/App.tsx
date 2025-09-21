@@ -5869,18 +5869,46 @@ const confirmImportDealers = async () => {
             <div className="grid grid-cols-2 gap-2 text-sm">
               <SelectField label="From State" value={fromState} onChange={setFromState} options={allStates.map((s) => ({ label: s, value: s }))} />
               <SelectField
-                label="From Region"
-                value={fromRegion}
-                onChange={setFromRegion}
-                options={(regions[fromState] || []).map((r) => ({ label: r, value: r }))}
+  label="From Region"
+  value={fromRegion}
+  onChange={setFromRegion}
+  options={(() => {
+    // Prefer regions catalog for the chosen state
+    const catalog = (regions?.[fromState] || []).filter(Boolean);
+    if (catalog.length > 0) {
+      return catalog.sort().map((r) => ({ label: r, value: r }));
+    }
+    // Fallback: derive unique regions from dealers in that state
+    const derived = Array.from(
+      new Set(
+        (dealers || [])
+          .filter((d) => d.state === fromState && d.region)
+          .map((d) => d.region as string)
+      )
+    );
+    return derived.sort().map((r) => ({ label: r, value: r }));
+  })()}
               />
               <SelectField label="To State" value={toState} onChange={setToState} options={allStates.map((s) => ({ label: s, value: s }))} />
               <SelectField
-                label="To Region"
-                value={toRegion}
-                onChange={setToRegion}
-                options={(regions[toState] || []).map((r) => ({ label: r, value: r }))}
-              />
+  label="To Region"
+  value={toRegion}
+  onChange={setToRegion}
+  options={(() => {
+    const catalog = (regions?.[toState] || []).filter(Boolean);
+    if (catalog.length > 0) {
+      return catalog.sort().map((r) => ({ label: r, value: r }));
+    }
+    const derived = Array.from(
+      new Set(
+        (dealers || [])
+          .filter((d) => d.state === toState && d.region)
+          .map((d) => d.region as string)
+      )
+    );
+    return derived.sort().map((r) => ({ label: r, value: r }));
+  })()}
+/>
             </div>
             <button className="mt-3 w-full px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={moveDealers}>
               Move Dealers
