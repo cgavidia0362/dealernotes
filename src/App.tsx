@@ -4988,6 +4988,24 @@ const UserManagementView: React.FC<{
     a.click();
     URL.revokeObjectURL(url);
   };
+  // --- Helper: get regions for a given state (catalog ∪ dealers)
+function getRegionsForState(state?: string): string[] {
+  const s = (state || "").toUpperCase().trim();
+  if (!s) return [];
+  // 1) from Regions Catalog (if present)
+  const fromCatalog = (regions?.[s] || []).filter(Boolean);
+  // 2) from actual dealers data (unique)
+  const fromDealers = Array.from(
+    new Set(
+      (dealers || [])
+        .filter((d) => (d?.state || "").toUpperCase() === s && d?.region)
+        .map((d) => String(d.region))
+    )
+  );
+  // union + sort
+  const merged = Array.from(new Set([...(fromCatalog || []), ...fromDealers]));
+  return merged.sort((a, b) => a.localeCompare(b));
+}
 // ---- Export Everything (ZIP) ----
 const [exportingAll, setExportingAll] = useState(false);
 
@@ -5863,57 +5881,46 @@ const confirmImportDealers = async () => {
 
             </div>
         
-          {/* Move Dealers Between Regions (bulk) */}
-          <div className="rounded-xl border p-3 bg-white">
-            <div className="font-semibold text-slate-800 mb-2">Move Dealers Between Regions (bulk)</div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <SelectField label="From State" value={fromState} onChange={setFromState} options={allStates.map((s) => ({ label: s, value: s }))} />
-              <SelectField
-  label="From Region"
-  value={fromRegion}
-  onChange={setFromRegion}
-  options={(() => {
-    // Prefer regions catalog for the chosen state
-    const catalog = (regions?.[fromState] || []).filter(Boolean);
-    if (catalog.length > 0) {
-      return catalog.sort().map((r) => ({ label: r, value: r }));
-    }
-    // Fallback: derive unique regions from dealers in that state
-    const derived = Array.from(
-      new Set(
-        (dealers || [])
-          .filter((d) => d.state === fromState && d.region)
-          .map((d) => d.region as string)
-      )
-    );
-    return derived.sort().map((r) => ({ label: r, value: r }));
-  })()}
-              />
-              <SelectField label="To State" value={toState} onChange={setToState} options={allStates.map((s) => ({ label: s, value: s }))} />
-              <SelectField
-  label="To Region"
-  value={toRegion}
-  onChange={setToRegion}
-  options={(() => {
-    const catalog = (regions?.[toState] || []).filter(Boolean);
-    if (catalog.length > 0) {
-      return catalog.sort().map((r) => ({ label: r, value: r }));
-    }
-    const derived = Array.from(
-      new Set(
-        (dealers || [])
-          .filter((d) => d.state === toState && d.region)
-          .map((d) => d.region as string)
-      )
-    );
-    return derived.sort().map((r) => ({ label: r, value: r }));
-  })()}
-/>
-            </div>
-            <button className="mt-3 w-full px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={moveDealers}>
-              Move Dealers
-            </button>
-          </div>
+            /* Move Dealers Between Regions (bulk) */
+<div className="rounded-xl border p-4">
+  <div className="font-semibold text-slate-800">Move Dealers Between Regions (bulk)</div>
+
+  <div className="grid grid-cols-2 gap-3 mt-3">
+    <SelectField
+      label="From State"
+      value={fromState}
+      onChange={setFromState}
+      options={allStates.map((s) => ({ label: s, value: s }))}
+    />
+    <SelectField
+      label="To State"
+      value={toState}
+      onChange={setToState}
+      options={allStates.map((s) => ({ label: s, value: s }))}
+    />
+    <SelectField
+      label="From Region"
+      value={fromRegion}
+      onChange={setFromRegion}
+      options={getRegionsForState(fromState).map((r) => ({ label: r, value: r }))}
+    />
+    <SelectField
+      label="To Region"
+      value={toRegion}
+      onChange={setToRegion}
+      options={getRegionsForState(toState).map((r) => ({ label: r, value: r }))}
+    />
+  </div>
+
+  <button
+    type="button"
+    className="mt-4 px-3 py-2 rounded-xl border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
+    onClick={moveDealers}  // keep your existing handler name
+    disabled={!fromState || !toState || !fromRegion || !toRegion}
+  >
+    Move Dealers
+  </button>
+</div>
         </div>
       </Card>
 
