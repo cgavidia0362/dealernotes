@@ -5451,6 +5451,8 @@ const getRegionsForState = (s: string): string[] => {
   const [toState, setToState] = useState("");
   const [toRegion, setToRegion] = useState("");
   const moveDealers = async () => {
+    console.log("moveDealers", { fromState, fromRegion, toState, toRegion });
+
   // 1) Guard rails
   if (!fromState || !fromRegion || !toState || !toRegion) {
     showToast("Please select both From and To state/region.", "error");
@@ -5942,13 +5944,13 @@ const confirmImportDealers = async () => {
     <SelectField
       label="From Region"
       value={fromRegion}
-      onChange={setFromRegion}
+      onChange={(v: any) => setFromRegion(v?.value ?? v ?? "")}
       options={getRegionsForState(fromState).map((r) => ({ label: r, value: r }))}
     />
     <SelectField
       label="To Region"
       value={toRegion}
-      onChange={setToRegion}
+      onChange={(v: any) => setToRegion(v?.value ?? v ?? "")}
       options={getRegionsForState(toState).map((r) => ({ label: r, value: r }))}
     />
   </div>
