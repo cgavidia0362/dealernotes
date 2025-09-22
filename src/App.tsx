@@ -5445,67 +5445,56 @@ const getRegionsForState = (s: string): string[] => {
     showToast("Region deleted.", "success");
   };
 
-  // Move dealers between regions (bulk)
-  const [fromState, setFromState] = useState("");
-  const [fromRegion, setFromRegion] = useState("");
-  const [toState, setToState] = useState("");
-  const [toRegion, setToRegion] = useState("");
-  const moveDealers = async () => {
-    console.log("moveDealers", { fromState, fromRegion, toState, toRegion });
+/* Move dealers between regions (bulk) */
+const [fromState, setFromState] = useState("");
+const [fromRegion, setFromRegion] = useState("");
+const [toState, setToState] = useState("");
+const [toRegion, setToRegion] = useState("");
 
-  // 1) Guard rails
+// Click handler for the "Move Dealers" button
+const moveDealers = async () => {
+  // 0) Guard: make sure all 4 picks are set
   if (!fromState || !fromRegion || !toState || !toRegion) {
-    showToast("Please select both From and To state/region.", "error");
-    return;
-  }
-  if (fromState === toState && fromRegion === toRegion) {
-    showToast("From and To are the same. Pick a different target.", "error");
+    showToast("Please select both From and To state/region", "error");
     return;
   }
 
-  // 2) How many will move?
-  const moving = dealers.filter(
-    (d) => d.state === fromState && d.region === fromRegion
-  ).length;
-  if (moving === 0) {
-    showToast("No dealers to move in the selected From region.", "error");
-    return;
-  }
+  try {
+    // 1) Update matching dealers in Supabase
+    // NOTE: this updates *all* dealers in the source state+region
+    const { data, error } = await supabase
+      .from("dealers")
+      .update({ state: toState, region: toRegion })
+      .eq("state", fromState)
+      .eq("region", fromRegion)
+      .select("id"); // return the ids we changed
 
-  // 3) Write to Supabase (bulk update)
-  //    This persists the change in the DB.
-  const { error } = await supabase
-    .from("dealers")
-    .update({ state: toState, region: toRegion })
-    .eq("state", fromState)
-    .eq("region", fromRegion);
+    if (error) throw error;
 
-  if (error) {
-    showToast(`Move failed: ${error.message}`, "error");
-    return;
-  }
+    const movedIds = (data ?? []).map((r: any) => String(r.id));
 
-  // 4) Update local state so UI matches DB instantly
-  setDealers((prev) =>
-    prev.map((d) =>
-      d.state === fromState && d.region === fromRegion
-        ? { ...d, state: toState, region: toRegion }
-        : d
-    )
-  );
-
-  // If you keep a regions catalog in state, keep it consistent too:
-  setRegions((prev) => {
-    const next = { ...prev };
-    // ensure target region exists in catalog
-    if (!next[toState]) next[toState] = [];
-    if (!next[toState].includes(toRegion)) {
-      next[toState] = [...next[toState], toRegion].sort();
+    // 2) Mirror the changes in local React state, so the UI reflects immediately
+    if (movedIds.length > 0) {
+      setDealers(prev =>
+        prev.map(d => (movedIds.includes(d.id) ? { ...d, state: toState, region: toRegion } : d))
+      );
     }
-    return next;
-  });
 
-  showToast(`Moved ${moving} dealer(s).`, "success");
+    // 3) Make sure the destination (toState/toRegion) exists in the Regions catalog
+    setRegions(prev => {
+      const next = { ...prev };
+      if (!next[toState]) next[toState] = [];
+      if (!next[toState].includes(toRegion)) next[toState] = [...next[toState], toRegion].sort();
+      return next;
+    });
+
+    // Optional: if you also want to auto-clean the source region when empty,
+    // you could re-query counts here, but it's fine to leave as-is.
+
+    showToast(`Moved ${movedIds.length} dealer(s) to ${toRegion}, ${toState}.`, "success");
+  } catch (e: any) {
+    showToast(e?.message || "Move failed.", "error");
+  }
 };
 
   // ---------- Regions table model ----------
@@ -5959,7 +5948,7 @@ const confirmImportDealers = async () => {
     type="button"
     className="mt-4 px-3 py-2 rounded-xl border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
     onClick={moveDealers}
-    disabled={!fromState || !toState || !fromRegion || !toRegion}
+    disabled={!fromState || !fromRegion || !toState || !toRegion}
   >
     Move Dealers
   </button>
