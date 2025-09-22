@@ -5883,7 +5883,7 @@ const confirmImportDealers = async () => {
 
             </div>
         
-            /* Move Dealers Between Regions (bulk) */
+            {/* Move Dealers Between Regions (bulk) */}
 <div className="rounded-xl border p-4">
   <div className="font-semibold text-slate-800">Move Dealers Between Regions (bulk)</div>
 
@@ -5917,7 +5917,7 @@ const confirmImportDealers = async () => {
   <button
     type="button"
     className="mt-4 px-3 py-2 rounded-xl border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
-    onClick={moveDealers}  // keep your existing handler name
+    onClick={moveDealers}
     disabled={!fromState || !toState || !fromRegion || !toRegion}
   >
     Move Dealers
