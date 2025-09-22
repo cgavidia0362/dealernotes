@@ -4988,7 +4988,7 @@ const UserManagementView: React.FC<{
     a.click();
     URL.revokeObjectURL(url);
   };
-  
+
 // ---- Export Everything (ZIP) ----
 const [exportingAll, setExportingAll] = useState(false);
 
@@ -5450,21 +5450,61 @@ const getRegionsForState = (s: string): string[] => {
   const [fromRegion, setFromRegion] = useState("");
   const [toState, setToState] = useState("");
   const [toRegion, setToRegion] = useState("");
-  const moveDealers = () => {
-    if (!fromState || !fromRegion || !toState || !toRegion) return showToast("Please select both From and To state/region.", "error");
-    const moving = dealers.filter((d) => d.state === fromState && d.region === fromRegion).length;
-    if (moving === 0) return showToast("No dealers to move in the selected From region.", "error");
-    setRegions((prev) => {
-      const next = { ...prev };
-      if (!next[toState]) next[toState] = [];
-      if (!next[toState].includes(toRegion)) next[toState] = [...next[toState], toRegion].sort();
-      return next;
-    });
-    setDealers((prev) =>
-      prev.map((d) => (d.state === fromState && d.region === fromRegion ? { ...d, state: toState, region: toRegion } : d))
-    );
-    showToast(`Moved ${moving} dealer(s).`, "success");
-  };
+  const moveDealers = async () => {
+  // 1) Guard rails
+  if (!fromState || !fromRegion || !toState || !toRegion) {
+    showToast("Please select both From and To state/region.", "error");
+    return;
+  }
+  if (fromState === toState && fromRegion === toRegion) {
+    showToast("From and To are the same. Pick a different target.", "error");
+    return;
+  }
+
+  // 2) How many will move?
+  const moving = dealers.filter(
+    (d) => d.state === fromState && d.region === fromRegion
+  ).length;
+  if (moving === 0) {
+    showToast("No dealers to move in the selected From region.", "error");
+    return;
+  }
+
+  // 3) Write to Supabase (bulk update)
+  //    This persists the change in the DB.
+  const { error } = await supabase
+    .from("dealers")
+    .update({ state: toState, region: toRegion })
+    .eq("state", fromState)
+    .eq("region", fromRegion);
+
+  if (error) {
+    showToast(`Move failed: ${error.message}`, "error");
+    return;
+  }
+
+  // 4) Update local state so UI matches DB instantly
+  setDealers((prev) =>
+    prev.map((d) =>
+      d.state === fromState && d.region === fromRegion
+        ? { ...d, state: toState, region: toRegion }
+        : d
+    )
+  );
+
+  // If you keep a regions catalog in state, keep it consistent too:
+  setRegions((prev) => {
+    const next = { ...prev };
+    // ensure target region exists in catalog
+    if (!next[toState]) next[toState] = [];
+    if (!next[toState].includes(toRegion)) {
+      next[toState] = [...next[toState], toRegion].sort();
+    }
+    return next;
+  });
+
+  showToast(`Moved ${moving} dealer(s).`, "success");
+};
 
   // ---------- Regions table model ----------
   const [regionModal, setRegionModal] = useState<{ state: string; region: string } | null>(null);
