@@ -4988,24 +4988,7 @@ const UserManagementView: React.FC<{
     a.click();
     URL.revokeObjectURL(url);
   };
-  // --- Helper: get regions for a given state (catalog ∪ dealers)
-function getRegionsForState(state?: string): string[] {
-  const s = (state || "").toUpperCase().trim();
-  if (!s) return [];
-  // 1) from Regions Catalog (if present)
-  const fromCatalog = (regions?.[s] || []).filter(Boolean);
-  // 2) from actual dealers data (unique)
-  const fromDealers = Array.from(
-    new Set(
-      (dealers || [])
-        .filter((d) => (d?.state || "").toUpperCase() === s && d?.region)
-        .map((d) => String(d.region))
-    )
-  );
-  // union + sort
-  const merged = Array.from(new Set([...(fromCatalog || []), ...fromDealers]));
-  return merged.sort((a, b) => a.localeCompare(b));
-}
+  
 // ---- Export Everything (ZIP) ----
 const [exportingAll, setExportingAll] = useState(false);
 
@@ -5409,6 +5392,22 @@ const copyInvite = async () => {
   const [searchRegion, setSearchRegion] = useState("");
 
   const allStates = Object.keys(regions).sort();
+// Build regions for a state from both the catalog and existing dealers
+const getRegionsForState = (s: string): string[] => {
+  const st = (s || "").trim().toUpperCase();
+  if (!st) return [];
+  const fromCatalog = (regions[st] || []);
+  const fromDealers = Array.from(
+    new Set(
+      dealers
+        .filter((d) => (d.state || "").toUpperCase() === st && !!d.region)
+        .map((d) => d.region!)
+    )
+  );
+  return Array.from(new Set([...fromCatalog, ...fromDealers]))
+    .filter(Boolean)
+    .sort();
+};
 
   const dealerCountFor = (st: string, rg: string) => dealers.filter((d) => d.state === st && d.region === rg).length;
 
