@@ -1,3 +1,4 @@
+// chore: no-op change to trigger StackBlitz git detection
 /* ============================= PART 1 / 4 ================================
    Imports, Types, Persistence, Seeders, Toasts, Auth, Shell, Dealer Search
    (With requested changes: Daily Summary 7-day + Admin/Manager scope,
