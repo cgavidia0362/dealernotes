@@ -3760,6 +3760,47 @@ useEffect(() => {
   })();
 }, [session]);
     // === Step 4B: Load dealers from Supabase after login (shared across devices) ===
+   // Sync "lastVisited" for each dealer from notes with category Visit/Visited
+const syncLastVisitedFromNotes = async () => {
+  try {
+    // 1) Pull the latest visited timestamp per dealer from Supabase notes
+    //    (accepts both "Visit" and "Visited" just in case)
+    const { data, error } = await supabase
+      .from("dealer_notes")
+      .select("dealer_id, category, created_at")
+      .in("category", ["Visit", "Visited"])
+      .order("created_at", { ascending: false }); // newest first
+    if (error) throw error;
+
+    // Build a map dealer_id -> latest ISO date (YYYY-MM-DD)
+    const latest: Record<string, string> = {};
+    for (const row of data || []) {
+      const id = String((row as any).dealer_id);
+      const ts = new Date((row as any).created_at).toISOString().slice(0, 10);
+      if (!latest[id]) latest[id] = ts; // first seen is newest due to order desc
+    }
+
+    // 2) Update local UI dealers immediately
+    setDealers((prev) =>
+      prev.map((d) => (latest[d.id] ? { ...d, lastVisited: latest[d.id] } : d))
+    );
+
+    // 3) Persist back to dealers table so list loads fast next time
+    const updates = Object.entries(latest).map(([dealerId, ymd]) => ({
+      id: dealerId,
+      last_visited: ymd,
+    }));
+    for (const u of updates) {
+      await supabase
+        .from("dealers")
+        .update({ last_visited: u.last_visited })
+        .eq("id", u.id);
+    }
+  } catch (e) {
+    console.debug("syncLastVisitedFromNotes failed", e);
+  }
+};
+
     useEffect(() => {
       if (!session) return;
   
@@ -3794,14 +3835,38 @@ useEffect(() => {
           // Replace local dealers with the shared list
           setDealers(fromDb);
   
-          // Rebuild regions catalog from DB (state -> unique regions)
-          const rebuilt: RegionsCatalog = {};
-          for (const d of fromDb) {
-            if (!rebuilt[d.state]) rebuilt[d.state] = [];
-            if (!rebuilt[d.state].includes(d.region)) rebuilt[d.state].push(d.region);
-          }
-          for (const st of Object.keys(rebuilt)) rebuilt[st].sort();
-          setRegions(rebuilt);
+          // Rebuild regions from dealers (existing behavior)
+const rebuilt: RegionsCatalog = {};
+for (const d of fromDb) {
+  if (!rebuilt[d.state]) rebuilt[d.state] = [];
+  if (!rebuilt[d.state].includes(d.region)) rebuilt[d.state].push(d.region);
+}
+for (const st of Object.keys(rebuilt)) rebuilt[st].sort();
+
+// NEW: also load curated regions from regions_catalog and MERGE
+const { data: cat, error: catErr } = await supabase
+  .from("regions_catalog")
+  .select("state,region");
+if (catErr) throw catErr;
+
+const fromCatalog: RegionsCatalog = {};
+for (const row of cat || []) {
+  const st = String((row as any).state || "").toUpperCase();
+  const rg = String((row as any).region || "");
+  if (!st || !rg) continue;
+  if (!fromCatalog[st]) fromCatalog[st] = [];
+  if (!fromCatalog[st].includes(rg)) fromCatalog[st].push(rg);
+}
+for (const st of Object.keys(fromCatalog)) fromCatalog[st].sort();
+
+// Merge both so manual entries survive refresh even if no dealers there yet
+const merged: RegionsCatalog = {};
+const allKeys = new Set([...Object.keys(fromCatalog), ...Object.keys(rebuilt)]);
+for (const st of allKeys) {
+  merged[st] = Array.from(new Set([...(fromCatalog[st] || []), ...(rebuilt[st] || [])])).sort();
+}
+setRegions(merged);
+await syncLastVisitedFromNotes();
         } catch (err) {
           console.debug("[dealers] load failed", err);
         }
@@ -5411,39 +5476,76 @@ const getRegionsForState = (s: string): string[] => {
 
   const dealerCountFor = (st: string, rg: string) => dealers.filter((d) => d.state === st && d.region === rg).length;
 
-  const createRegion = () => {
+  const createRegion = async () => {
     const st = stateInput.trim().toUpperCase();
     const rg = regionInput.trim();
     if (!st || !rg) return showToast("State and region are required.", "error");
-    setRegions((prev) => {
-      const next = { ...prev };
-      if (!next[st]) next[st] = [];
-      if (!next[st].includes(rg)) next[st] = [...next[st], rg].sort();
-      return next;
-    });
-    setStateInput("");
-    setRegionInput("");
-    showToast("Region added.", "success");
+  
+    try {
+      // 1) Save to Supabase so it survives refresh/login
+      const { error } = await supabase
+        .from("regions_catalog")
+        .upsert({ state: st, region: rg }, { onConflict: "state,region" });
+      if (error) throw error;
+  
+      // 2) Reflect immediately in UI
+      setRegions((prev) => {
+        const next = { ...prev };
+        if (!next[st]) next[st] = [];
+        if (!next[st].includes(rg)) next[st] = [...next[st], rg].sort();
+        return next;
+      });
+  
+      setStateInput("");
+      setRegionInput("");
+      showToast("Region added & saved.", "success");
+    } catch (e: any) {
+      showToast(e?.message || "Failed to save region.", "error");
+    }
   };
+// Persisted delete: remove region from Supabase + update UI
+const deleteRegion = async (st: string, rg: string) => {
+  const count = dealerCountFor(st, rg);
+  if (count > 0) {
+    return showToast(
+      "Cannot delete region while dealers exist there. Move them first.",
+      "error"
+    );
+  }
 
-  const deleteRegion = (st: string, rg: string) => {
-    const count = dealerCountFor(st, rg);
-    if (count > 0) return showToast("Cannot delete region while dealers exist there. Move them first.", "error");
+  try {
+    // 1) Delete from Supabase so it survives refresh/login
+    const { error } = await supabase
+      .from("regions_catalog")
+      .delete()
+      .eq("state", st)
+      .eq("region", rg);
+    if (error) throw error;
+
+    // 2) Update UI list of regions
     setRegions((prev) => {
       const next = { ...prev };
       next[st] = (next[st] || []).filter((x) => x !== rg);
       if (!next[st]?.length) delete next[st];
       return next;
     });
+
+    // 3) Also remove from users' coverage so views stay consistent
     setUsers((prev) =>
       prev.map((u) => {
         const copy = { ...u, regionsByState: { ...u.regionsByState } };
-        if (copy.regionsByState[st]) copy.regionsByState[st] = copy.regionsByState[st].filter((x) => x !== rg);
+        if (copy.regionsByState[st]) {
+          copy.regionsByState[st] = copy.regionsByState[st].filter((x) => x !== rg);
+        }
         return copy;
       })
     );
+
     showToast("Region deleted.", "success");
-  };
+  } catch (e: any) {
+    showToast(e?.message || "Failed to delete region.", "error");
+  }
+};
 
 /* Move dealers between regions (bulk) */
 const [fromState, setFromState] = useState("");
@@ -5910,9 +6012,8 @@ const confirmImportDealers = async () => {
     Add / Create
   </button>
 </div>
-
             </div>
-        
+
             {/* Move Dealers Between Regions (bulk) */}
 <div className="rounded-xl border p-4">
   <div className="font-semibold text-slate-800">Move Dealers Between Regions (bulk)</div>
