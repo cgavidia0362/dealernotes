@@ -6434,11 +6434,9 @@ const exportDailySummaryCSV = () => {
       : "No results. Try different filters."}
   </div>
 )}
-      </div>
-      
-      {/* Search Results */}
-      <div className="space-y-2">
-        {filtered.map((d) => {
+{/* Search Results */}
+<div className="space-y-2">
+  {filtered.map((d) => {
           const inRoute = routeIds.has(d.id);
           return (
             <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
@@ -6563,17 +6561,20 @@ const exportDailySummaryCSV = () => {
               })}
             </div>
       
-            {/* Close */}
-            <div className="mt-4 flex items-center justify-end">
-              <button
-                className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
-                onClick={() => setDailyOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </Modal>
-        )}
-      }
-      export default App;
+       {/* Close */}
+       <div className="mt-4 flex items-center justify-end">
+        <button
+          className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+          onClick={() => setDailyOpen(false)}
+        >
+          Close
+        </button>
+      </div>
+    </div> {/* end modal inner container */}
+    </Modal>
+      )}
+    </div>
+  );
+};
+export default App;
+
