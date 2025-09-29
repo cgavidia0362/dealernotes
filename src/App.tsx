@@ -6435,7 +6435,7 @@ const exportDailySummaryCSV = () => {
   </div>
 )}
       </div>
-  )
+      
       {/* Search Results */}
       <div className="space-y-2">
         {filtered.map((d) => {
