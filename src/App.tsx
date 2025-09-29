@@ -3334,1711 +3334,23 @@ const ReportingView: React.FC<{
    - Status control Active/Inactive in Edit User; deactivation prevents login by
      moving password out of the active store; reactivation restores it
 =========================================================================== */
-
-/* --------------------------------- App ------------------------------------ */
-const App: React.FC = () => {
-  const { users, setUsers, dealers, setDealers, regions, setRegions, tasks, setTasks, notes, setNotes } = useData();
-  const [route, setRoute] = useState<RouteKey>("login");
-  const [session, setSession] = useState<Session>(null);
-  const { toasts, showToast, dismiss } = useToasts();
-
-  // RESET INVITE: show modal if visiting /reset
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetToken, setResetToken] = useState<string>("");
-
-  useEffect(() => {
-    if (window.location.pathname === "/reset") {
-      const params = new URLSearchParams(window.location.search);
-      const t = params.get("token") || "";
-      setResetToken(t);
-      setResetOpen(true);
-    }
-  }, []);
-// --- Supabase invite/recovery reset detection (TOP-LEVEL) ---
-// These states are the "light switches" we flip when a Supabase link is used.
-// (It's okay if your editor warns they're unused right now. In Step 2 we'll use them.)
-const [showForceReset, setShowForceReset] = useState(false);
-const [newPass, setNewPass] = useState('');
-const [newPass2, setNewPass2] = useState('');
-
-// Make sure we only open the modal once per page load.
-const openedResetRef = useRef(false);
-const openResetOnce = () => {
-  if (openedResetRef.current) return;
-  openedResetRef.current = true;
-  setShowForceReset(true);
-};
-// who is resetting (derived from Supabase -> match to our app user)
-const [resetUser, setResetUser] = useState<User | null>(null);
-const [resetUsername, setResetUsername] = useState('');
-const [resetEmail, setResetEmail] = useState('');
-
-// Read auth params from BOTH the hash (#...) and the query (?...) and return tokens too
-const parseAuthParams = () => {
-  const url = new URL(window.location.href);
-
-  const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
-  const hash = new URLSearchParams(rawHash || '');
-  const search = url.searchParams;
-
-  const type = (hash.get('type') || search.get('type') || '').toLowerCase();
-  const access_token =
-    hash.get('access_token') || search.get('access_token') || '';
-  const refresh_token =
-    hash.get('refresh_token') || search.get('refresh_token') || '';
-  const next = (search.get('next') || '').toLowerCase();
-
-  const hasAccessToken = !!access_token;
-  const shouldOpen =
-    type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
-
-  return { shouldOpen, type, access_token, refresh_token };
-};
-// If the URL carries tokens, adopt that session so we're acting as the invited user
-const adoptSessionFromUrl = async () => {
-  try {
-    const { access_token, refresh_token } = parseAuthParams();
-    if (!access_token) return;
-
-    await supabase.auth.setSession({
-      access_token,
-      refresh_token: refresh_token || ''
-    });
-
-    console.debug('[auth] adopted session from URL tokens');
-  } catch (err) {
-    console.debug('[auth] setSession failed', err);
-  }
-};
-// A) Run once on page load
-useEffect(() => {
-  (async () => {
-    console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
-
-    const { shouldOpen } = parseAuthParams();
-    if (shouldOpen) {
-      // 1) switch to the invited user's session (even if admin is logged in)
-      await adoptSessionFromUrl();
-
-      // 2) now open the modal
-      openResetOnce();
-
-      // 3) give Supabase a moment, then clean the URL (remove tokens & next)
-      setTimeout(() => {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
-          url.searchParams.delete('next');
-        }
-        window.history.replaceState({}, '', url.toString());
-      }, 800);
-    }
-  })();
-}, []);
-
-// B) Safety-net: listen to Supabase auth events
-useEffect(() => {
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-    if (event === 'PASSWORD_RECOVERY') {
-      console.debug('[auth] PASSWORD_RECOVERY');
-      openResetOnce();
-    } else if (event === 'SIGNED_IN') {
-      const { shouldOpen } = parseAuthParams();
-      if (shouldOpen) {
-        console.debug('[auth] SIGNED_IN + shouldOpen');
-        openResetOnce();
-      }
-    }
-  });
-  return () => subscription.unsubscribe();
-}, []);
-
-// C) Extra safety: if the URL hash changes after load
-// C) Extra safety: if the URL hash changes after load, adopt session then open modal
-useEffect(() => {
-  const onHash = async () => {
-    const { shouldOpen } = parseAuthParams();
-    if (shouldOpen) {
-      // 1) switch to the invited user's session (even if someone else is logged in)
-      await adoptSessionFromUrl();
-
-      // 2) open the reset modal
-      openResetOnce();
-
-      // 3) clean the URL after a moment (removes tokens and next=/reset)
-      setTimeout(() => {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
-          url.searchParams.delete('next');
-        }
-        window.history.replaceState({}, '', url.toString());
-      }, 800);
-    }
-  };
-
-  window.addEventListener('hashchange', onHash as any, { passive: true } as any);
-  return () => window.removeEventListener('hashchange', onHash as any);
-}, []);
-// Robust helper: read authed email from the invite/recovery sign-in
-const getEmailFromAuth = async (): Promise<string> => {
-  try {
-    const { data } = await supabase.auth.getUser(); // capital U
-    const e = (data?.user?.email || '').toLowerCase();
-    if (e) return e;
-  } catch (err) {
-    console.debug('[auth] getUser() failed', err);
-  }
-  try {
-    const { data } = await supabase.auth.getSession();
-    const e = (data?.session?.user?.email || '').toLowerCase();
-    if (e) return e;
-  } catch (err) {
-    console.debug('[auth] getSession() failed', err);
-  }
-  return '';
-};
-
-// When the reset modal opens, read Supabase user -> map to our app user
-useEffect(() => {
-  if (!showForceReset) return;
-
-  (async () => {
-    try {
-      await adoptSessionFromUrl(); // NEW: ensure we are the invited user before reading getUser()
-      console.debug('[auth] tokens parsed', parseAuthParams());
-      console.debug('[after adopt] getUser()', await supabase.auth.getUser());
-      console.debug('[after adopt] getSession()', await supabase.auth.getSession());
-      
-      // 1) Read email robustly (from adopted session)
-      const emailLower = await getEmailFromAuth();
-      setResetEmail(emailLower);
-  
-      // 2) Pull the admin-picked username from user_metadata if present
-      const { data: uinfo } = await supabase.auth.getUser();
-      const metaUsername = String(uinfo?.user?.user_metadata?.username || '').trim();
-  
-      // 3) Fallback username = local part of email (before '@')
-      const local = emailLower.split('@')[0] || '';
-  
-      // 4) Try to match an app user from memory (optional)
-      let u =
-        (Array.isArray(users) &&
-          (users.find(x => (x?.email || '').toLowerCase() === emailLower) ||
-           users.find(x => (x?.username || '').toLowerCase() === emailLower) ||
-           users.find(x => (x?.username || '').toLowerCase() === local))) ||
-        null;
-  
-      // 5) Optional DB fallback (only if you actually have a 'users' table)
-      if (!u && emailLower) {
-        try {
-          const r = await supabase
-            .from('users') // change if your table differs, or remove if not used
-            .select('id, username, email')
-            .or(`email.eq.${emailLower},username.eq.${local}`)
-            .single();
-          if (!r.error && r.data) u = r.data as any;
-        } catch { /* ignore */ }
-      }
-  
-      // 6) Prefer metadata → else matched user → else local/email
-      const chosenUsername = metaUsername || (u?.username || '') || local || emailLower;
-      console.debug('[reset-modal chosen]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
-
-      setResetUser(u);
-      setResetUsername(chosenUsername);  
-
-      // Helpful debug if you need it:
-      console.debug('[reset-modal]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
-    } catch {
-      setResetUser(null);
-      setResetUsername('');
-    }
-  })();
-}, [showForceReset, users]);
-
-// --- end top-level detection ---
-// === Step 5B: Load rep coverage from Supabase after login ===
-useEffect(() => {
-  // If nobody is logged in yet, do nothing
-  if (!session) return;
-
-  (async () => {
-    try {
-      // 1) Load basic user profiles
-      const { data: profiles, error: pErr } = await supabase
-        .from('profiles')
-        .select('id, username, email, role, status, name, phone')         // ← no name, no phone
-.order('username', { ascending: true });              // ← sort by username, not name
-
-      if (pErr) throw pErr;
-      const idToUsername = new Map<string, string>();
-      for (const p of (profiles || []) as any[]) {
-        idToUsername.set(String(p.id), String(p.username));
-      }      
-      // 2) Load coverage rows: one row per (username, state, region?)
-      //    If region is NULL, it means "all regions in that state".
-      const { data: coverage, error: cErr } = await supabase
-      .from('rep_coverage')
-      .select('user_id, state, region');    
-
-      if (cErr) throw cErr;
-
-      // 3) Build states[] and regionsByState{} for each user
-      //    We'll collect coverage into maps first, then turn into arrays.
-      const covByUser = new Map<
-        string,
-        { states: Set<string>; map: Record<string, Set<string>> }
-      >();
-
-      for (const row of coverage || []) {
-        const u = idToUsername.get(String((row as any).user_id)) || '';
-        const st = (row as any).state as string;
-        const rg = ((row as any).region as string | null) ?? null;
-
-        if (!u || !st) continue;
-
-        if (!covByUser.has(u)) {
-          covByUser.set(u, { states: new Set<string>(), map: {} });
-        }
-        const entry = covByUser.get(u)!;
-        entry.states.add(st);
-
-        // NULL region = "all regions in that state"
-        if (rg == null || rg === '') {
-          entry.map[st] = new Set<string>(regions[st] || []);
-        } else {
-          if (!entry.map[st]) entry.map[st] = new Set<string>();
-          entry.map[st]!.add(rg);
-        }
-      }
-
-      // 4) Merge profiles + coverage into your app's User[] shape
-      const mergedUsers: User[] = (profiles || []).map((p: any) => {
-        const cv =
-          covByUser.get(p.username) ||
-          ({ states: new Set<string>(), map: {} } as {
-            states: Set<string>;
-            map: Record<string, Set<string>>;
-          });
-
-        const statesArr = Array.from(cv.states).sort();
-        const rbs: Record<string, string[]> = {};
-        for (const st of Object.keys(cv.map)) {
-          rbs[st] = Array.from(cv.map[st]).sort();
-        }
-
-        return {
-          id: String(p.id),
-          username: String(p.username),
-          name: String(p.name || p.username || ''),
-          email: p.email || undefined,
-          role: (p.role || 'Rep') as Role,
-          states: statesArr,
-          regionsByState: rbs,
-          phone: p.phone || undefined,
-          status: (p.status || 'Active') as UserStatus,
-        } as User;
-      });
-
-      setUsers(mergedUsers);
-
-      // 5) Keep the status radio buttons in sync with Supabase
-      console.debug('[5B] Loaded profiles + coverage', { mergedUsers, coverage });
-    } catch (e: any) {
-      console.error('[5B] load coverage failed', e);
-      showToast(e?.message || 'Failed to load rep coverage', 'error');
-    }
-  })();
-}, [session, regions]);
-
-  const can = useMemo(() => {
-    const role = session?.role;
-    return { reporting: role === "Admin" || role === "Manager", userMgmt: role === "Admin" };
-  }, [session]);
-
-  const handleLogin = (s: Session) => {
-    setSession(s);
-    setRoute("dealer-search");
-  };
-  const handleLogout = () => {
-    setSession(null);
-    setRoute("login");
-    showToast("You have been logged off.", "success");
-  };
-
-  const tasksForUser = useMemo(() => {
-    if (!session || session.role !== "Rep") return [];
-    return tasks.filter((t) => t.repUsername === session.username && !t.completedAtISO);
-  }, [tasks, session]);
-  // === Step 3A: Load live users from Supabase profiles (read-only) ===
-  // We merge profiles (role/status/email) into our local users list.
-  useEffect(() => {
-    // Only try after someone is logged in (so RLS knows who we are).
-    if (!session) return;
-
-    (async () => {
-      try {
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("id, email, username, role, status");
-
-        if (error) throw error;
-
-        setUsers((prev) => {
-          const byUsername = new Map(prev.map((u) => [u.username.toLowerCase(), u]));
-          const next = [...prev];
-
-          for (const p of data || []) {
-            const pEmail = (p as any).email as string | null;
-            const pUsername =
-              ((p as any).username as string | undefined) ||
-              (pEmail ? pEmail.split("@")[0] : "");
-
-            const key = (pUsername || "").toLowerCase();
-            const existing = byUsername.get(key);
-
-            if (existing) {
-// NEW: carry over the real Supabase UUID so saves can target the row
-if ((p as any).id) (existing as any).id = (p as any).id as string;
-              existing.email = pEmail || existing.email;
-              existing.role = ((p as any).role || existing.role) as Role;
-              existing.status = ((p as any).status || existing.status) as UserStatus;
-            } else {
-              // Add a minimal new user record so the table can display it
-              next.push({
-                id: ((p as any).id as string) || uid(),
-                name: pUsername || pEmail || "User",
-                username: pUsername || (pEmail ? pEmail.split("@")[0] : "user"),
-                email: pEmail || undefined,
-                role: (((p as any).role as Role) ?? "Rep") as Role,
-                states: [],
-                regionsByState: {},
-                phone: "",
-                status: (((p as any).status as UserStatus) ?? "Active") as UserStatus,
-              });
-            }
-          }
-          return next;
-        });
-    
-      } catch (err) {
-        console.debug("[profiles] load failed", err);
-      }
-    })();
-  }, [session]); // runs after login; refresh page to re-sync
-  // === Step 4G: Load tasks from Supabase ===
-useEffect(() => {
-  if (!session) return;
-
-  const isAdminManager = session.role === 'Admin' || session.role === 'Manager';
-
-  (async () => {
-    const base = supabase
-      .from('dealer_tasks')
-      .select('id,dealer_id,rep_username,text,created_at,completed_at')
-      .order('created_at', { ascending: false });
-
-    const { data, error } = isAdminManager
-      ? await base
-      : await base.eq('rep_username', session.username);
-
-    if (error) {
-      showToast(error.message || 'Failed to load tasks', 'error');
-      return;
-    }
-
-    setTasks(
-      (data || []).map((r: any) => ({
-        id: r.id,
-        dealerId: r.dealer_id,
-        repUsername: r.rep_username,
-        text: r.text,
-        createdAtISO: r.created_at,
-        completedAtISO: r.completed_at || undefined,
-      }))
-    );
-  })();
-}, [session]);
-    // === Step 4B: Load dealers from Supabase after login (shared across devices) ===
-   // Sync "lastVisited" for each dealer from notes with category Visit/Visited
-const syncLastVisitedFromNotes = async () => {
-  try {
-    // 1) Pull the latest visited timestamp per dealer from Supabase notes
-    //    (accepts both "Visit" and "Visited" just in case)
-    const { data, error } = await supabase
-      .from("dealer_notes")
-      .select("dealer_id, category, created_at")
-      .in("category", ["Visit", "Visited"])
-      .order("created_at", { ascending: false }); // newest first
-    if (error) throw error;
-
-    // Build a map dealer_id -> latest ISO date (YYYY-MM-DD)
-    const latest: Record<string, string> = {};
-    for (const row of data || []) {
-      const id = String((row as any).dealer_id);
-      const ts = new Date((row as any).created_at).toISOString().slice(0, 10);
-      if (!latest[id]) latest[id] = ts; // first seen is newest due to order desc
-    }
-
-    // 2) Update local UI dealers immediately
-    setDealers((prev) =>
-      prev.map((d) => (latest[d.id] ? { ...d, lastVisited: latest[d.id] } : d))
-    );
-
-    // 3) Persist back to dealers table so list loads fast next time
-    const updates = Object.entries(latest).map(([dealerId, ymd]) => ({
-      id: dealerId,
-      last_visited: ymd,
-    }));
-    for (const u of updates) {
-      await supabase
-        .from("dealers")
-        .update({ last_visited: u.last_visited })
-        .eq("id", u.id);
-    }
-  } catch (e) {
-    console.debug("syncLastVisitedFromNotes failed", e);
-  }
-};
-
-    useEffect(() => {
-      if (!session) return;
-  
-      (async () => {
-        try {
-          const { data, error } = await supabase
-            .from("dealers")
-            .select(
-              "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
-            );
-  
-          if (error) throw error;
-  
-          const fromDb: Dealer[] = (data || []).map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            state: r.state,
-            region: r.region,
-            type: r.type,
-            status: r.status,
-            address1: r.address1 || "",
-            address2: r.address2 || "",
-            city: r.city || "",
-            zip: r.zip || "",
-            contacts: Array.isArray(r.contacts) ? r.contacts : [],
-            assignedRepUsername: r.assigned_rep_username || undefined,
-            lastVisited: r.last_visited ? String(r.last_visited) : undefined, // keep YYYY-MM-DD
-            sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
-            noDealReasons: r.no_deal_reasons || undefined,
-          }));
-  
-          // Replace local dealers with the shared list
-          setDealers(fromDb);
-  
-          // Rebuild regions from dealers (existing behavior)
-const rebuilt: RegionsCatalog = {};
-for (const d of fromDb) {
-  if (!rebuilt[d.state]) rebuilt[d.state] = [];
-  if (!rebuilt[d.state].includes(d.region)) rebuilt[d.state].push(d.region);
-}
-for (const st of Object.keys(rebuilt)) rebuilt[st].sort();
-
-// NEW: also load curated regions from regions_catalog and MERGE
-const { data: cat, error: catErr } = await supabase
-  .from("regions_catalog")
-  .select("state,region");
-if (catErr) throw catErr;
-
-const fromCatalog: RegionsCatalog = {};
-for (const row of cat || []) {
-  const st = String((row as any).state || "").toUpperCase();
-  const rg = String((row as any).region || "");
-  if (!st || !rg) continue;
-  if (!fromCatalog[st]) fromCatalog[st] = [];
-  if (!fromCatalog[st].includes(rg)) fromCatalog[st].push(rg);
-}
-for (const st of Object.keys(fromCatalog)) fromCatalog[st].sort();
-
-// Merge both so manual entries survive refresh even if no dealers there yet
-const merged: RegionsCatalog = {};
-const allKeys = new Set([...Object.keys(fromCatalog), ...Object.keys(rebuilt)]);
-for (const st of allKeys) {
-  merged[st] = Array.from(new Set([...(fromCatalog[st] || []), ...(rebuilt[st] || [])])).sort();
-}
-setRegions(merged);
-await syncLastVisitedFromNotes();
-        } catch (err) {
-          console.debug("[dealers] load failed", err);
-        }
-      })();
-    }, [session]);  
-  const handleClickTask = (t: Task) => {
-    saveLS(LS_LAST_SELECTED_DEALER, t.dealerId);
-    setRoute("dealer-notes");
-    // NOTE: keep the alert until user completes inside Dealer Notes (do NOT auto-remove here)
-  };
-
-  let body: React.ReactNode = null;
-  if (route === "login") {
-    body = <LoginView onLogin={handleLogin} showToast={showToast} />;
-  } else {
-    if (!session) {
-      body = (
-        <div className="min-h-screen grid place-items-center bg-slate-50">
-          <div className="text-center">
-            <div className="text-2xl font-semibold text-slate-700 mb-2">Session expired</div>
-            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setRoute("login")}>
-              Return to Login
-            </button>
-          </div>
-        </div>
-      );
-    } else {
-      body = (
-        <div className="min-h-screen bg-slate-50">
-          <TopBar
-            session={session}
-            route={route}
-            setRoute={setRoute}
-            onLogout={handleLogout}
-            can={can}
-            tasksForUser={tasksForUser}
-            onClickTask={handleClickTask}
-          />
-          <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-            {route === "dealer-search" && (
-              <DealerSearchView
-                session={session}
-                users={users}
-                dealers={dealers}
-                setDealers={setDealers}
-                regions={regions}
-                setRegions={setRegions}
-                can={can}
-                setRoute={setRoute}
-                showToast={showToast}
-                tasksForUser={tasksForUser}
-                onClickTask={handleClickTask}
-                notes={notes}
-              />
-            )}
-
-            {route === "dealer-notes" && (
-              <DealerNotesView
-                session={session}
-                users={users}
-                dealers={dealers}
-                setDealers={setDealers}
-                notes={notes}
-                setNotes={setNotes}
-                tasks={tasks}
-                setTasks={setTasks}
-                regions={regions}
-                setRoute={setRoute}
-                showToast={showToast}
-              />
-            )}
-{route === "rep-route" && (
-  <RepRouteView
-    session={session}
-    users={users}
-    dealers={dealers}
-    notes={notes}
-    setRoute={setRoute}
-    showToast={showToast}
-  />
-)}
-            {route === "reporting" && <ReportingView dealers={dealers} users={users} notes={notes} />}
-
-            {route === "user-management" && (
-              <UserManagementView
-                users={users}
-                setUsers={setUsers}
-                regions={regions}
-                setRegions={setRegions}
-                dealers={dealers}
-                setDealers={setDealers}
-                notes={notes}
-                showToast={showToast}
-              />
-            )}
-          </main>
-        </div>
-      );
-    }
-  }
-// Save Password for Supabase invite/recovery + activate local user + log them in
-const handleSaveNewPassword = async () => {
-  try {
-    // 1) Basic validation
-    if (!newPass || newPass.length < 8) {
-      showToast('Password must be at least 8 characters.', 'error');
-      return;
-    }
-    if (newPass !== newPass2) {
-      showToast('Passwords do not match.', 'error');
-      return;
-    }
-
-    // 2) Update password in Supabase (token already signed-in from invite/recovery)
-    const { error } = await supabase.auth.updateUser({ password: newPass });
-    if (error) throw error;
-
-   // 3) Identify which app user this is (no extra network call needed)
-const emailLower = (resetEmail || '').toLowerCase();
-const local = emailLower.split('@')[0] || '';
-const candidates = [resetUsername.toLowerCase(), emailLower, local].filter(Boolean);
-
-// 4) Find the user in your in-memory list by any of the candidates
-const u =
-  (Array.isArray(users) &&
-    users.find((x: any) => {
-      const uname = (x?.username || '').toLowerCase();
-      const em = (x?.email || '').toLowerCase();
-      return candidates.includes(uname) || candidates.includes(em);
-    })) ||
-  null;
-
-    // 5) If we can’t map them, still finish gracefully (they can log in manually)
-    if (!u) {
-      showToast('Password set. Please log in with your username.', 'success');
-      setShowForceReset(false);
-      setNewPass('');
-      setNewPass2('');
-      setRoute('login');
-      return;
-    }
-
-    // 6) Store password locally so your Login screen accepts it (username → password)
-    //    These helpers/constants already exist in your app; if TS complains, keep the casts.
-    const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
-    pwMap[u.username] = newPass;                       // original case
-    pwMap[u.username.toLowerCase()] = newPass;         // case-insensitive login
-    saveLS(LS_PASSWORDS, pwMap);    
-
-    // 7) Mark the user Active in your local list and ensure email is saved
-    //    If your status field is named differently (e.g., is_active), tweak here.
-    setUsers((prev: any[]) =>
-      prev.map((x: any) =>
-        x.id === u.id
-          ? {
-              ...x,
-              status: 'Active' as UserStatus,
-              email: x.email || resetEmail,
-            }
-          : x
-      )
-    );
-
-    // 8) Close modal, clear fields, create a session, and route to Home
-    setShowForceReset(false);
-    setNewPass('');
-    setNewPass2('');
-
-    setSession({ username: u.username, role: u.role });
-    setRoute('dealer-search'); // your Home screen
-
-    showToast('Password set. You are logged in.', 'success');
-  } catch (e: any) {
-    showToast(e?.message || 'Failed to set password', 'error');
-  }
-};
-  return (
-    <>
-      {body}
-      <ToastHost toasts={toasts} dismiss={dismiss} />
-      {showForceReset && (
-  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
-    <div className="grid gap-3">
-      <p className="text-sm text-slate-500">
-        Welcome! Please create your password to finish setting up your account.
-      </p>
-{/* Read-only identity fields */}
-<TextField
-  label="Username"
-  value={resetUsername || '(loading…)'}
-  onChange={() => {}}
-  disabled
-/>
-<TextField
-  label="Email"
-  value={resetEmail || ''}
-  onChange={() => {}}
-  disabled
-/>
-{/* Trouble helper: resend a secure reset email */}
-<div className="rounded-lg border p-3 bg-slate-50 text-slate-700">
-  <div className="text-xs mb-2">
-    Having trouble? We can resend a secure reset link to your email.
-  </div>
-  <button
-    type="button"
-    className="px-3 py-1.5 rounded-lg border hover:bg-white"
-    onClick={async () => {
-      let email = (resetEmail || "").trim().toLowerCase();
-      if (!email || !email.includes("@")) {
-        const typed = window.prompt("Type your email to resend the secure reset link:");
-        if (!typed) return;
-        email = typed.trim().toLowerCase();
-      }
-      try {
-        const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
-        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-        if (error) throw error;
-        showToast("Secure reset email sent.", "success");
-      } catch (e: any) {
-        showToast(e?.message || "Could not send reset email.", "error");
-      }
-    }}
-  >
-    Resend secure reset email
-  </button>
-</div>
-      <TextField
-        label="New Password"
-        type="password"
-        value={newPass}
-        onChange={(v) => setNewPass(v)}
-      />
-
-      <TextField
-        label="Confirm Password"
-        type="password"
-        value={newPass2}
-        onChange={(v) => setNewPass2(v)}
-      />
-
-      <div className="flex gap-2 justify-end">
-        <button
-          className="px-3 py-2 rounded-lg border"
-          onClick={() => setShowForceReset(false)}
-        >
-          Cancel
-        </button>
-        <button
-          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
-          onClick={handleSaveNewPassword}
-        >
-          Save Password
-        </button>
-      </div>
-    </div>
-  </Modal>
-)}
-      {resetOpen && (
-        <ResetInviteModal
-          token={resetToken}
-          onClose={() => setResetOpen(false)}
-          users={users}
-          setUsers={setUsers}
-          showToast={showToast}
-        />
-      )}
-    </>
-  );
-};
-
-/* ----------------------------- Shared UI Bits ----------------------------- */
-
-const Card: React.FC<{ title: string; subtitle?: string; children?: React.ReactNode }> = ({ title, subtitle, children }) => (
-  <div className="rounded-xl border bg-white p-3 md:p-5 shadow-sm">
-    <div className="mb-2 md:mb-3">
-      <div className="text-slate-800 font-semibold">{title}</div>
-      {subtitle && <div className="text-slate-500 text-xs md:text-sm mt-0.5">{subtitle}</div>}
-    </div>
-    {children}
-  </div>
-);
-
-const KPI: React.FC<{ title: string; value: number | string }> = ({ title, value }) => (
-  <div className="rounded-xl border bg-white p-3 md:p-5 shadow-sm">
-    <div className="text-slate-500 text-[11px] md:text-sm tracking-wide uppercase">{title}</div>
-    <div className="mt-1 text-[22px] md:text-2xl leading-tight font-semibold text-slate-800">{value}</div>
-  </div>
-);
-
-const PlaceholderCard: React.FC<{ title: string; description?: string }> = ({ title, description }) => (
-  <div className="rounded-xl border bg-white p-6 shadow-sm">
-    <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-    {description && <p className="mt-2 text-slate-600 text-sm">{description}</p>}
-  </div>
-);
-
-const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => {
-  // Close on ESC
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={title}>
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-
-      {/* Container: bottom sheet on phones, centered dialog on desktop */}
-      <div className="absolute inset-0 flex items-end md:items-center justify-center p-0 md:p-4">
-        {/* Panel */}
-        <div className="w-full md:max-w-4xl bg-white shadow-xl md:rounded-2xl overflow-hidden flex flex-col h-[92vh] md:h-auto md:max-h-[90vh]">
-          {/* Sticky header with close button */}
-          <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white z-10">
-            <div className="text-slate-800 font-semibold truncate">{title}</div>
-            <button
-              onClick={onClose}
-              className="text-slate-500 hover:text-slate-700 px-2 py-1 rounded"
-              aria-label="Close"
-              title="Close"
-            >
-              ✕
-            </button>
-          </div>
-
-          {/* Scrollable content area (phone-safe) */}
-          <div className="p-4 overflow-y-auto overscroll-contain flex-1">
-            {children}
-          </div>
-
-          {/* Optional footer shadow on iOS when content stops behind home bar (visual nicety) */}
-          <div className="md:hidden pointer-events-none h-3 bg-gradient-to-t from-white to-transparent" />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const TextField: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  type?: string;
-}> = ({ label, value, onChange, placeholder, disabled, type }) => {
-  return (
-    <label className="block">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
-      <input
-        disabled={disabled}
-        type={type || "text"}
-        className={`w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 ${disabled ? "bg-slate-100 text-slate-400" : ""}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
-    </label>
-  );
-};
-
-const SelectField: React.FC<{
-  label: string;
-  value: string | number;
-  onChange: (v: string) => void;
-  options: { label: string; value: string | number }[];
-  disabled?: boolean;
-}> = ({ label, value, onChange, options, disabled }) => {
-  // Mobile popover state
-  const [open, setOpen] = React.useState(false);
-  const wrapRef = React.useRef<HTMLDivElement | null>(null);
-
-  // Close on outside click / ESC
-  React.useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
-  // label text for current value
-  const current =
-    options.find((o) => String(o.value) === String(value))?.label ?? "";
-
-  return (
-    <label className="block">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
-
-      {/* Desktop / tablets: keep native select */}
-      <select
-        disabled={disabled}
-        className={`hidden md:block w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 ${
-          disabled ? "bg-slate-100 text-slate-400" : ""
-        }`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {options.map((o) => (
-          <option key={`${o.value}`} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-
-      {/* Mobile: custom popover anchored to the field */}
-      <div ref={wrapRef} className="relative md:hidden">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => !disabled && setOpen((s) => !s)}
-          className={`w-full rounded-lg border px-3 py-2 text-left outline-none focus:ring-2 focus:ring-blue-500 ${
-            disabled ? "bg-slate-100 text-slate-400" : "bg-white"
-          }`}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-        >
-          <span className={current ? "text-slate-800" : "text-slate-400"}>
-            {current || "Select…"}
-          </span>
-        </button>
-
-        {open && !disabled && (
-          <div
-            role="listbox"
-            className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-xl border bg-white shadow-lg max-h-64 overflow-y-auto"
-          >
-            {options.map((o) => {
-              const selected = String(o.value) === String(value);
-              return (
-                <button
-                  key={`${o.value}`}
-                  role="option"
-                  aria-selected={selected}
-                  onClick={() => {
-                    onChange(String(o.value));
-                    setOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-2 text-base ${
-                    selected
-                      ? "bg-blue-50 text-blue-700"
-                      : "hover:bg-slate-50 text-slate-800"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </label>
-  );
-};
-
-/* ---------------------------- Reset Invite Modal -------------------------- */
-/**
- * New behavior:
- * - Read token -> invite map (LS_INVITES) to find the target user
- * - Prefill read-only: Full Name, Username, Phone
- * - Only allow setting New Password (+ confirm)
- * - On save: store to LS_PASSWORDS[username] = new password
- *            remove token from LS_INVITES
- *            mark user Active (via status map) so they can log in
- */
-const LS_DISABLED_PASSWORDS = "demo_passwords_disabled"; // username -> password (when Inactive)
-const LS_USER_STATUS = "demo_user_status"; // username -> "Active" | "Inactive"
-
-const ResetInviteModal: React.FC<{
-  token: string;
-  onClose: () => void;
-  users: User[];
-  setUsers: React.Dispatch<React.SetStateAction<User[]>>;
-  showToast: (m: string, k?: ToastKind) => void;
-}> = ({ token, onClose, users, setUsers, showToast }) => {
-  const invites = loadLS<InviteMap>(LS_INVITES, {});
-  const pw = loadLS<PasswordMap>(LS_PASSWORDS, {});
-  const statusMap = loadLS<Record<string, "Active" | "Inactive">>(LS_USER_STATUS, {});
-
-  const invite = token ? invites[token] : undefined;
-  const user = invite ? users.find((u) => u.id === invite.userId) || null : null;
-
-  const [pwd, setPwd] = useState("");
-  const [confirm, setConfirm] = useState("");
-
-  const doReset = () => {
-    if (!token || !invite || !user) return showToast("Invalid or expired invite link.", "error");
-    if (!pwd) return showToast("Please enter a new password.", "error");
-    if (pwd !== confirm) return showToast("Passwords do not match.", "error");
-
-    // Set password (replaces any previous)
-    const nextPw: PasswordMap = { ...pw, [user.username]: pwd };
-    saveLS(LS_PASSWORDS, nextPw);
-
-    // Mark Active (and ensure any disabled pw copy is removed)
-    const disabledMap = loadLS<Record<string, string>>(LS_DISABLED_PASSWORDS, {});
-    if (disabledMap[user.username]) {
-      delete disabledMap[user.username];
-      saveLS(LS_DISABLED_PASSWORDS, disabledMap);
-    }
-    const nextStatus = { ...statusMap, [user.username]: "Active" as const };
-    saveLS(LS_USER_STATUS, nextStatus);
-
-    // Remove invite token (one-time use)
-    const nextInv = { ...invites };
-    delete nextInv[token];
-    saveLS(LS_INVITES, nextInv);
-
-    showToast("Password set. You can now log in.", "success");
-    onClose();
-  };
-
-  return (
-    <Modal title="Create Your Account" onClose={onClose}>
-      {!user ? (
-        <div className="text-sm text-red-600">This invite link is invalid or has expired.</div>
-      ) : (
-        <div className="space-y-3">
-          {/* NOTE: per request, no token text shown */}
-          <div className="grid md:grid-cols-2 gap-3">
-            <TextField label="Full Name" value={user.name} onChange={() => {}} disabled />
-            <TextField label="Username" value={user.username} onChange={() => {}} disabled />
-            <TextField label="Phone" value={user.phone || ""} onChange={() => {}} disabled />
-            <TextField label="New Password" type="password" value={pwd} onChange={setPwd} />
-            <TextField label="Confirm New Password" type="password" value={confirm} onChange={setConfirm} />
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <button className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50" onClick={onClose}>
-              Cancel
-            </button>
-            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={doReset}>
-              Create Account
-            </button>
-          </div>
-          <div className="text-xs text-slate-500">
-            After setting your password, return to the login screen to sign in.
-          </div>
-        </div>
-      )}
-    </Modal>
-  );
-};
-/* ------------------------------- Rep Route -------------------------------- */
-
-type RepRouteViewProps = {
-  session: Session;
-  users: User[];
-  dealers: Dealer[];
-  notes: Note[];
-  setRoute: (r: RouteKey) => void;
-  showToast: (m: string, k?: ToastKind) => void;
-};
-
-const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
-  const { session, users, dealers, notes, setRoute, showToast } = props;
-
-  // find current profile; gate to Reps only
-  const me = users.find((u) => u.username === session?.username) || null;
-  const isRep = session?.role === "Rep";
-  if (!isRep) {
-    return <div className="p-6 text-center text-slate-600">This page is only for reps.</div>;
-  }
-
-  // LS key helper
-  const routeKeyForUser = (username?: string | null) => `${LS_REP_ROUTE}_${username || "anon"}`;
-
-  // types
-  type RouteStop = { dealerId: string; position: number };
-  type RouteByDate = Record<string, RouteStop[]>;
-
-  // state
-  const [dateStr, setDateStr] = useState<string>(todayISO());
-  const [routeByDate, setRouteByDate] = useState<RouteByDate>({});
-
-  // load today’s route from Supabase
-  useEffect(() => {
-    if (!me?.id) return;
-    let isCancelled = false;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("dealer_routes")
-        .select("dealer_id, position")
-        .eq("user_id", me.id)
-        .eq("date", dateStr)
-        .order("position", { ascending: true });
-
-      if (error) {
-        console.error("load route error:", error);
-        return;
-      }
-      if (isCancelled) return;
-
-      const rows: RouteStop[] = (data ?? []).map((r: any) => ({
-        dealerId: r.dealer_id,
-        position: r.position ?? 1,
-      }));
-      setRouteByDate((prev) => ({ ...prev, [dateStr]: rows }));
-    })();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [dateStr, me?.id]);
-
-  // which dealers can this rep see?
-  const accessibleDealers = useMemo(() => {
-    if (!me) return [] as Dealer[];
-    const can = (d: Dealer) => {
-      const assigned = d.assignedRepUsername === me.username;
-      const coversState = !!me.states?.includes?.(d.state);
-      const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
-      return assigned || (coversState && coversRegion);
-    };
-    return dealers.filter(can);
-  }, [dealers, me]);
-
-  // filters
-  const unique = (arr: (string | undefined)[]) =>
-    Array.from(new Set(arr.filter(Boolean) as string[])).sort();
-
-  const states = useMemo(() => unique(accessibleDealers.map((d) => d.state)), [accessibleDealers]);
-  const regions = useMemo(() => unique(accessibleDealers.map((d) => d.region)), [accessibleDealers]);
-  const cities = useMemo(() => unique(accessibleDealers.map((d) => d.city)), [accessibleDealers]);
-
-  const [q, setQ] = useState("");
-  const [state, setState] = useState("");
-  const [region, setRegion] = useState("");
-  const [city, setCity] = useState("");
-
-  // current route (for selected date)
-  const route: RouteStop[] = routeByDate[dateStr] || [];
-  const routeIds = new Set(route.map((r) => r.dealerId));
-
-  // filtered search results
-  const filtered = useMemo(() => {
-    const qq = q.trim().toLowerCase();
-    return accessibleDealers.filter((d) => {
-      if (state && d.state !== state) return false;
-      if (region && d.region !== region) return false;
-      if (city && d.city !== city) return false;
-      if (qq.length < 2) return false;
-      const hay = `${d.name} ${d.city} ${d.region}`.toLowerCase();
-      return hay.includes(qq);
-    });
-  }, [accessibleDealers, q, state, region, city]);
-
-  // helpers
-  const saveLS = (k: string, v: any) => localStorage.setItem(k, JSON.stringify(v));
-  const loadLS = <T,>(k: string, fallback: T): T => {
-    try {
-      const s = localStorage.getItem(k);
-      return s ? (JSON.parse(s) as T) : fallback;
-    } catch {
-      return fallback;
-    }
-  };
-
-  // persist route map per-user
-  useEffect(() => {
-    saveLS(routeKeyForUser(session?.username), routeByDate);
-  }, [routeByDate, session?.username]);
-
-  // add dealer to today’s route (local + supabase)
-  const addDealer = async (d: Dealer) => {
-    setRouteByDate((prev) => {
-      const current = prev[dateStr] || [];
-      if (current.some((r) => r.dealerId === d.id)) return prev;
-      const nextPos = current.length ? Math.max(...current.map((r) => r.position || 0)) + 1 : 1;
-      const next = [...current, { dealerId: d.id, position: nextPos }];
-      return { ...prev, [dateStr]: next };
-    });
-
-    // upsert (ignore conflict via UNIQUE)
-    const { error } = await supabase
-      .from("dealer_routes")
-      .upsert(
-        {
-          user_id: me!.id,
-          dealer_id: d.id,
-          date: dateStr,
-          position: (routeByDate[dateStr]?.length || 0) + 1,
-        },
-        { onConflict: "user_id,date,dealer_id" }
-      );
-
-    if (error) {
-      console.error("add route upsert error:", error);
-      showToast("Saved locally, but sync failed. Try again.", "error");
-      return;
-    }
-
-    showToast("Added to route.", "success");
-  };
-
-  // remove dealer
-  const removeDealer = async (dealerId: string) => {
-    setRouteByDate((prev) => {
-      const next = (prev[dateStr] || []).filter((r) => r.dealerId !== dealerId);
-      return { ...prev, [dateStr]: next };
-    });
-
-    const { error } = await supabase
-      .from("dealer_routes")
-      .delete()
-      .eq("user_id", me!.id)
-      .eq("date", dateStr)
-      .eq("dealer_id", dealerId);
-
-    if (error) {
-      console.error("remove route error:", error);
-      showToast("Removed locally, but sync failed.", "error");
-      return;
-    }
-    showToast("Removed from route.", "success");
-  };
-
-  // move up/down
-  const move = async (dealerId: string, dir: "up" | "down") => {
-    setRouteByDate((prev) => {
-      const curr = [...(prev[dateStr] || [])];
-      const i = curr.findIndex((r) => r.dealerId === dealerId);
-      if (i < 0) return prev;
-      const j = dir === "up" ? i - 1 : i + 1;
-      if (j < 0 || j >= curr.length) return prev;
-      [curr[i], curr[j]] = [curr[j], curr[i]];
-      // re-number positions 1..N
-      const renum = curr.map((r, idx) => ({ dealerId: r.dealerId, position: idx + 1 }));
-      return { ...prev, [dateStr]: renum };
-    });
-
-    // best-effort position sync
-    const curr = routeByDate[dateStr] || [];
-    const idx = curr.findIndex((r) => r.dealerId === dealerId);
-    const targetIndex = dir === "up" ? idx - 1 : idx + 1;
-    const pair = [curr[idx]?.dealerId, curr[targetIndex]?.dealerId].filter(Boolean) as string[];
-    for (let k = 0; k < pair.length; k++) {
-      const id = pair[k];
-      // new position equals its new index + 1 after swap
-      const newPos = dir === "up" ? (id === dealerId ? idx : targetIndex) : (id === dealerId ? idx + 2 : idx + 1);
-      await supabase
-        .from("dealer_routes")
-        .update({ position: newPos })
-        .eq("user_id", me!.id)
-        .eq("date", dateStr)
-        .eq("dealer_id", id);
-    }
-  };
-
-  // clear the whole day
-  const clearDay = async () => {
-    const current = routeByDate[dateStr] || [];
-    if (!current.length) return;
-    if (!confirm("Clear all stops for this day?")) return;
-
-    setRouteByDate((prev) => ({ ...prev, [dateStr]: [] }));
-
-    const { error } = await supabase
-      .from("dealer_routes")
-      .delete()
-      .eq("user_id", me!.id)
-      .eq("date", dateStr);
-
-    if (error) {
-      console.error("clear day error:", error);
-      showToast("Cleared locally, but sync failed.", "error");
-      return;
-    }
-  };
-
-  // export + copy helpers (addresses only)
-  const exportCSV = () => {
-    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    const rows: (string | number)[][] = [["Dealer", "Address1", "Address2", "City", "State", "Zip", "Region"]];
-    for (const r of sorted) {
-      const d = dealers.find((x) => x.id === r.dealerId);
-      rows.push([
-        d?.name || "",
-        d?.address1 || "",
-        d?.address2 || "",
-        d?.city || "",
-        d?.state || "",
-        d?.zip || "",
-        d?.region || "",
-      ]);
-    }
-    const csv = rows.map((row) => row.map((v) => `${String(v).replace(/"/g, '""')}`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `rep-route-${dateStr}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
-  const copyAll = async () => {
-    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    const lines = sorted
-      .map((r) => {
-        const d = dealers.find((x) => x.id === r.dealerId);
-        return [d?.name, d?.address1, d?.address2, d?.city, d?.state, d?.zip]
-        .filter(Boolean)
-        .join(", ");
-      })
-      .join("\n");
-    await navigator.clipboard.writeText(lines);
-    showToast("Route (name + address) copied.", "success");
-  };
-
-  // navigation to a dealer’s notes page
-  // Build a Google Maps URL for a dealer address
-const mapUrl = (d: Dealer) => {
-  const q = [d.name, d.address1, d.address2, d.city, d.state, d.zip]
-    .filter(Boolean)
-    .join(", ");
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
-};
-
-  const viewDealer = (dealerId: string) => {
-    saveLS(LS_LAST_SELECTED_DEALER, dealerId);
-    setRoute("dealer-notes");
-  };
-
-  // action button class (mobile-friendly)
-  const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
-
-  // --- render ---
-  const sortedRoute = [...route].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-
-  // Daily Summary modal state
-  const [dailyOpen, setDailyOpen] = useState(false);
-
-  // Precompute daily notes for this rep + date
-  const todaysDealerIds = new Set(sortedRoute.map((r) => r.dealerId));
-  // Summary range (like Home): today / yesterday / last 7 days (relative to dateStr)
-const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7">("today");
-
-// Compute start/end labels (string-based so we can compare with YYYY-MM-DD)
-const { startStr, endStr, rangeLabel } = useMemo(() => {
-  const addDaysStr = (isoDate: string, delta: number) => {
-    const d = new Date(`${isoDate}T00:00:00`);
-    d.setDate(d.getDate() + delta);
-    return d.toISOString().slice(0, 10);
-  };
-
-  if (summaryRange === "yesterday") {
-    const y = addDaysStr(dateStr, -1);
-    return { startStr: y, endStr: y, rangeLabel: y };
-  }
-
-  if (summaryRange === "7") {
-    const start = addDaysStr(dateStr, -6); // inclusive 7 days, end = dateStr
-    return { startStr: start, endStr: dateStr, rangeLabel: `${start} – ${dateStr}` };
-  }
-
-  // today
-  return { startStr: dateStr, endStr: dateStr, rangeLabel: dateStr };
-}, [dateStr, summaryRange]);
-
-  const todaysNotes = useMemo(
-    () =>
-      notes.filter((n) => {
-        const d = dealers.find((x) => x.id === n.dealerId);
-        if (!d) return false;
-        if (!todaysDealerIds.has(n.dealerId)) return false;
-// in selected range (string compare works for YYYY-MM-DD)
-const day = (n.tsISO || "").slice(0, 10);
-return day >= startStr && day <= endStr;
-      }),
-    [notes, dealers, sortedRoute, dateStr]
-  );
-// Copy today's notes (same behavior as Home)
-const copyDailySummary = async () => {
-  const lines = todaysNotes
-    .map(n => {
-      const d = dealers.find(x => x.id === n.dealerId);
-      const when = (n.tsISO || "").slice(11, 16); // HH:MM
-      return `• ${d?.name ?? "Unknown"} (${d?.region ?? ""}, ${d?.state ?? ""}) — ${n.category} by ${n.authorUsername}${when ? ` at ${when}` : ""}\n  ${n.text}`;
-    })
-    .join("\n\n");
-
-  await navigator.clipboard.writeText(lines || `No notes for ${dateStr}.`);
-  showToast("Summary copied.", "success");
-};
-
-// Export today's notes to CSV (same behavior as Home)
-const exportDailySummaryCSV = () => {
-  const rows: (string | number)[][] = [
-    ["Date","Dealer","Region","State","Category","Author","Note"]
-  ];
-  for (const n of todaysNotes) {
-    const d = dealers.find(x => x.id === n.dealerId);
-    rows.push([
-      dateStr,
-      d?.name || "",
-      d?.region || "",
-      d?.state || "",
-      n.category || "",
-      n.authorUsername || "",
-      (n.text || "").replace(/\n/g, " ")
-    ]);
-  }
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `daily-summary-${dateStr}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-};
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-<div className="flex items-center gap-2 flex-wrap">
-  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
-  <button
-    onClick={() => setDailyOpen(true)}
-    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-    title="Show notes summary"
-  >
-    <span className="inline-block -ml-1">📄</span>
-    Daily Summary
-  </button>
-</div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="date"
-            value={dateStr}
-            onChange={(e) => setDateStr(e.target.value)}
-            className="border rounded-lg px-3 py-2"
-            title="Pick a day"
-          />
-          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>
-            Clear Day
-          </button>
-          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>
-            Export CSV
-          </button>
-          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
-            Copy All
-          </button>
-        </div>
-      </div>
-
-      {/* Search & Filters */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Find your dealers</h2>
-          <span className="text-sm text-slate-500">
-  {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
-</span>
-        </div>
-
-        <div className="grid md:grid-cols-4 gap-3">
-          <div className="md:col-span-2">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search dealers (name, city, region)…"
-              className="w-full border rounded-lg px-3 py-2"
-            />
-          </div>
-
-          <select className="border rounded-lg px-3 py-2" value={state} onChange={(e) => setState(e.target.value)}>
-            <option value="">All States</option>
-            {states.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-
-          <select className="border rounded-lg px-3 py-2" value={region} onChange={(e) => setRegion(e.target.value)}>
-            <option value="">All Regions</option>
-            {regions.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-
-          <select className="border rounded-lg px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)}>
-            <option value="">All Cities</option>
-            {cities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {filtered.length === 0 && (
-  <div className="p-6 text-center text-slate-500">
-    {q.trim().length < 2
-      ? "Start typing to search (min 2 letters)."
-      : "No results. Try different filters."}
-  </div>
-)}
-      </div>
-
-      {/* Search Results */}
-      <div className="space-y-2">
-        {filtered.map((d) => {
-          const inRoute = routeIds.has(d.id);
-          return (
-            <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
-              <div>
-                <div className="font-semibold">{d.name}</div>
-                <div className="text-sm text-slate-600">
-                  {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
-                </div>
-                <div className="text-xs text-slate-500">{d.region}</div>
-              </div>
-              <div className="flex gap-2">
-                <button className={`${actionBtn}`} disabled={inRoute} onClick={() => addDealer(d)}>
-                  {inRoute ? "Added" : "Add"}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Route List */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Route for {dateStr}</h2>
-          <span className="text-sm text-slate-500">{sortedRoute.length} stop(s)</span>
-        </div>
-
-        {sortedRoute.length === 0 ? (
-          <div className="p-6 text-center text-slate-500">No dealers in the route yet. Add some from above.</div>
-        ) : (
-          <div className="space-y-2">
-            {sortedRoute.map((r, idx) => {
-              const d = dealers.find((x) => x.id === r.dealerId);
-              return (
-                <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div>
-                    <div className="font-semibold">{idx + 1}. {d?.name || "(dealer removed)"}</div>
-                    <div className="text-sm text-slate-600">
-                      {[d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ")}
-                    </div>
-                    <div className="text-xs text-slate-500">{d?.region || ""}</div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
-                    <a
-                      href={d ? mapUrl(d) : "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={`${actionBtn}`}
-                    >
-                      Maps
-                    </a>
-                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
-                    <button className={actionBtn} onClick={() => move(r.dealerId, "up")}>&uarr;</button>
-                    <button className={actionBtn} onClick={() => move(r.dealerId, "down")}>&darr;</button>
-                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Daily Summary modal */}
-      {dailyOpen && (
-        <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
-          <div className="space-y-4">
-  {/* Bar: date + actions (Copy / Export) */}
-  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-  <div className="flex items-center gap-3 flex-wrap">
-  <div className="text-sm text-slate-600">
-    Showing notes for <span className="font-semibold">{rangeLabel}</span>
-  </div>
-
-  {/* Range selector (same behavior as Home) */}
-  <select
-    className="border rounded-lg px-2 py-1 text-sm"
-    value={summaryRange}
-    onChange={(e) => setSummaryRange(e.target.value as "today" | "yesterday" | "7")}
-    title="Choose range"
-  >
-    <option value="today">Today</option>
-    <option value="yesterday">Yesterday</option>
-    <option value="7">Last 7 days</option>
-  </select>
-</div>
-
-<div className="flex items-center gap-2">
-  <button className="px-3 py-2 rounded-lg border" onClick={copyDailySummary}>
-    Copy
-  </button>
-  <button className="px-3 py-2 rounded-lg border" onClick={exportDailySummaryCSV}>
-    Export CSV
-  </button>
-</div>
-  </div>
-
-  {/* Notes list */}
-  <div className="divide-y">
-    {todaysNotes.length === 0 && (
-      <div className="p-4 text-center text-slate-500">No notes for today.</div>
-    )}
-
-    {todaysNotes.map((n) => {
-      const d = dealers.find((x) => x.id === n.dealerId);
-      return (
-        <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
-          <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
-          <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
-          <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
-            {n.category}
-          </div>
-          <div className="text-[11px] text-slate-500 mb-1">
-            by {n.authorUsername} {(n.tsISO || "").slice(11,16)}
-          </div>
-          <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
-        </div>
-      );
-    })}
-  </div>
-
-  {/* Close */}
-  <div className="mt-4 flex items-center justify-end">
-    <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
-      Close
-    </button>
-  </div>
-</div>
-        </Modal>
-      )}
-    </div>
-  );
-};
-
 /* ---------------------------- User Management ----------------------------- */
 
 
-const UserManagementView: React.FC<{
-  users: User[];
-  setUsers: React.Dispatch<React.SetStateAction<User[]>>;
-  regions: RegionsCatalog;
-  setRegions: React.Dispatch<React.SetStateAction<RegionsCatalog>>;
-  dealers: Dealer[];
-  setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
-  notes: Note[];
-  showToast: (m: string, k?: "success" | "error") => void;
-}> = ({ users, setUsers, regions, setRegions, dealers, setDealers, notes, showToast }) => {
+function UserManagementView(
+  {
+    users, setUsers, regions, setRegions, dealers, setDealers, notes, showToast
+  }: {
+    users: User[];
+    setUsers: React.Dispatch<React.SetStateAction<User[]>>;
+    regions: RegionsCatalog;
+    setRegions: React.Dispatch<React.SetStateAction<RegionsCatalog>>;
+    dealers: Dealer[];
+    setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
+    notes: Note[];
+    showToast: (m: string, k?: "success" | "error") => void;
+  }
+) {
   // ---------- Utils: CSV ----------
   const csvEscape = (v: unknown) => {
     const s = String(v ?? "");
@@ -6543,6 +4855,1725 @@ const confirmImportDealers = async () => {
         </Modal>
       )}
     </div>
+  );  
+}
+
+
+/* --------------------------------- App ------------------------------------ */
+const App: React.FC = () => {
+  const { users, setUsers, dealers, setDealers, regions, setRegions, tasks, setTasks, notes, setNotes } = useData();
+  const [route, setRoute] = useState<RouteKey>("login");
+  const [session, setSession] = useState<Session>(null);
+  const { toasts, showToast, dismiss } = useToasts();
+
+  // RESET INVITE: show modal if visiting /reset
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetToken, setResetToken] = useState<string>("");
+
+  useEffect(() => {
+    if (window.location.pathname === "/reset") {
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get("token") || "";
+      setResetToken(t);
+      setResetOpen(true);
+    }
+  }, []);
+// --- Supabase invite/recovery reset detection (TOP-LEVEL) ---
+// These states are the "light switches" we flip when a Supabase link is used.
+// (It's okay if your editor warns they're unused right now. In Step 2 we'll use them.)
+const [showForceReset, setShowForceReset] = useState(false);
+const [newPass, setNewPass] = useState('');
+const [newPass2, setNewPass2] = useState('');
+
+// Make sure we only open the modal once per page load.
+const openedResetRef = useRef(false);
+const openResetOnce = () => {
+  if (openedResetRef.current) return;
+  openedResetRef.current = true;
+  setShowForceReset(true);
+};
+// who is resetting (derived from Supabase -> match to our app user)
+const [resetUser, setResetUser] = useState<User | null>(null);
+const [resetUsername, setResetUsername] = useState('');
+const [resetEmail, setResetEmail] = useState('');
+
+// Read auth params from BOTH the hash (#...) and the query (?...) and return tokens too
+const parseAuthParams = () => {
+  const url = new URL(window.location.href);
+
+  const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+  const hash = new URLSearchParams(rawHash || '');
+  const search = url.searchParams;
+
+  const type = (hash.get('type') || search.get('type') || '').toLowerCase();
+  const access_token =
+    hash.get('access_token') || search.get('access_token') || '';
+  const refresh_token =
+    hash.get('refresh_token') || search.get('refresh_token') || '';
+  const next = (search.get('next') || '').toLowerCase();
+
+  const hasAccessToken = !!access_token;
+  const shouldOpen =
+    type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
+
+  return { shouldOpen, type, access_token, refresh_token };
+};
+// If the URL carries tokens, adopt that session so we're acting as the invited user
+const adoptSessionFromUrl = async () => {
+  try {
+    const { access_token, refresh_token } = parseAuthParams();
+    if (!access_token) return;
+
+    await supabase.auth.setSession({
+      access_token,
+      refresh_token: refresh_token || ''
+    });
+
+    console.debug('[auth] adopted session from URL tokens');
+  } catch (err) {
+    console.debug('[auth] setSession failed', err);
+  }
+};
+// A) Run once on page load
+useEffect(() => {
+  (async () => {
+    console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
+
+    const { shouldOpen } = parseAuthParams();
+    if (shouldOpen) {
+      // 1) switch to the invited user's session (even if admin is logged in)
+      await adoptSessionFromUrl();
+
+      // 2) now open the modal
+      openResetOnce();
+
+      // 3) give Supabase a moment, then clean the URL (remove tokens & next)
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.hash = '';
+        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
+          url.searchParams.delete('next');
+        }
+        window.history.replaceState({}, '', url.toString());
+      }, 800);
+    }
+  })();
+}, []);
+
+// B) Safety-net: listen to Supabase auth events
+useEffect(() => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      console.debug('[auth] PASSWORD_RECOVERY');
+      openResetOnce();
+    } else if (event === 'SIGNED_IN') {
+      const { shouldOpen } = parseAuthParams();
+      if (shouldOpen) {
+        console.debug('[auth] SIGNED_IN + shouldOpen');
+        openResetOnce();
+      }
+    }
+  });
+  return () => subscription.unsubscribe();
+}, []);
+
+// C) Extra safety: if the URL hash changes after load
+// C) Extra safety: if the URL hash changes after load, adopt session then open modal
+useEffect(() => {
+  const onHash = async () => {
+    const { shouldOpen } = parseAuthParams();
+    if (shouldOpen) {
+      // 1) switch to the invited user's session (even if someone else is logged in)
+      await adoptSessionFromUrl();
+
+      // 2) open the reset modal
+      openResetOnce();
+
+      // 3) clean the URL after a moment (removes tokens and next=/reset)
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.hash = '';
+        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
+          url.searchParams.delete('next');
+        }
+        window.history.replaceState({}, '', url.toString());
+      }, 800);
+    }
+  };
+
+  window.addEventListener('hashchange', onHash as any, { passive: true } as any);
+  return () => window.removeEventListener('hashchange', onHash as any);
+}, []);
+// Robust helper: read authed email from the invite/recovery sign-in
+const getEmailFromAuth = async (): Promise<string> => {
+  try {
+    const { data } = await supabase.auth.getUser(); // capital U
+    const e = (data?.user?.email || '').toLowerCase();
+    if (e) return e;
+  } catch (err) {
+    console.debug('[auth] getUser() failed', err);
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    const e = (data?.session?.user?.email || '').toLowerCase();
+    if (e) return e;
+  } catch (err) {
+    console.debug('[auth] getSession() failed', err);
+  }
+  return '';
+};
+
+// When the reset modal opens, read Supabase user -> map to our app user
+useEffect(() => {
+  if (!showForceReset) return;
+
+  (async () => {
+    try {
+      await adoptSessionFromUrl(); // NEW: ensure we are the invited user before reading getUser()
+      console.debug('[auth] tokens parsed', parseAuthParams());
+      console.debug('[after adopt] getUser()', await supabase.auth.getUser());
+      console.debug('[after adopt] getSession()', await supabase.auth.getSession());
+      
+      // 1) Read email robustly (from adopted session)
+      const emailLower = await getEmailFromAuth();
+      setResetEmail(emailLower);
+  
+      // 2) Pull the admin-picked username from user_metadata if present
+      const { data: uinfo } = await supabase.auth.getUser();
+      const metaUsername = String(uinfo?.user?.user_metadata?.username || '').trim();
+  
+      // 3) Fallback username = local part of email (before '@')
+      const local = emailLower.split('@')[0] || '';
+  
+      // 4) Try to match an app user from memory (optional)
+      let u =
+        (Array.isArray(users) &&
+          (users.find(x => (x?.email || '').toLowerCase() === emailLower) ||
+           users.find(x => (x?.username || '').toLowerCase() === emailLower) ||
+           users.find(x => (x?.username || '').toLowerCase() === local))) ||
+        null;
+  
+      // 5) Optional DB fallback (only if you actually have a 'users' table)
+      if (!u && emailLower) {
+        try {
+          const r = await supabase
+            .from('users') // change if your table differs, or remove if not used
+            .select('id, username, email')
+            .or(`email.eq.${emailLower},username.eq.${local}`)
+            .single();
+          if (!r.error && r.data) u = r.data as any;
+        } catch { /* ignore */ }
+      }
+  
+      // 6) Prefer metadata → else matched user → else local/email
+      const chosenUsername = metaUsername || (u?.username || '') || local || emailLower;
+      console.debug('[reset-modal chosen]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
+
+      setResetUser(u);
+      setResetUsername(chosenUsername);  
+
+      // Helpful debug if you need it:
+      console.debug('[reset-modal]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
+    } catch {
+      setResetUser(null);
+      setResetUsername('');
+    }
+  })();
+}, [showForceReset, users]);
+
+// --- end top-level detection ---
+// === Step 5B: Load rep coverage from Supabase after login ===
+useEffect(() => {
+  // If nobody is logged in yet, do nothing
+  if (!session) return;
+
+  (async () => {
+    try {
+      // 1) Load basic user profiles
+      const { data: profiles, error: pErr } = await supabase
+        .from('profiles')
+        .select('id, username, email, role, status, name, phone')         // ← no name, no phone
+.order('username', { ascending: true });              // ← sort by username, not name
+
+      if (pErr) throw pErr;
+      const idToUsername = new Map<string, string>();
+      for (const p of (profiles || []) as any[]) {
+        idToUsername.set(String(p.id), String(p.username));
+      }      
+      // 2) Load coverage rows: one row per (username, state, region?)
+      //    If region is NULL, it means "all regions in that state".
+      const { data: coverage, error: cErr } = await supabase
+      .from('rep_coverage')
+      .select('user_id, state, region');    
+
+      if (cErr) throw cErr;
+
+      // 3) Build states[] and regionsByState{} for each user
+      //    We'll collect coverage into maps first, then turn into arrays.
+      const covByUser = new Map<
+        string,
+        { states: Set<string>; map: Record<string, Set<string>> }
+      >();
+
+      for (const row of coverage || []) {
+        const u = idToUsername.get(String((row as any).user_id)) || '';
+        const st = (row as any).state as string;
+        const rg = ((row as any).region as string | null) ?? null;
+
+        if (!u || !st) continue;
+
+        if (!covByUser.has(u)) {
+          covByUser.set(u, { states: new Set<string>(), map: {} });
+        }
+        const entry = covByUser.get(u)!;
+        entry.states.add(st);
+
+        // NULL region = "all regions in that state"
+        if (rg == null || rg === '') {
+          entry.map[st] = new Set<string>(regions[st] || []);
+        } else {
+          if (!entry.map[st]) entry.map[st] = new Set<string>();
+          entry.map[st]!.add(rg);
+        }
+      }
+
+      // 4) Merge profiles + coverage into your app's User[] shape
+      const mergedUsers: User[] = (profiles || []).map((p: any) => {
+        const cv =
+          covByUser.get(p.username) ||
+          ({ states: new Set<string>(), map: {} } as {
+            states: Set<string>;
+            map: Record<string, Set<string>>;
+          });
+
+        const statesArr = Array.from(cv.states).sort();
+        const rbs: Record<string, string[]> = {};
+        for (const st of Object.keys(cv.map)) {
+          rbs[st] = Array.from(cv.map[st]).sort();
+        }
+
+        return {
+          id: String(p.id),
+          username: String(p.username),
+          name: String(p.name || p.username || ''),
+          email: p.email || undefined,
+          role: (p.role || 'Rep') as Role,
+          states: statesArr,
+          regionsByState: rbs,
+          phone: p.phone || undefined,
+          status: (p.status || 'Active') as UserStatus,
+        } as User;
+      });
+
+      setUsers(mergedUsers);
+
+      // 5) Keep the status radio buttons in sync with Supabase
+      console.debug('[5B] Loaded profiles + coverage', { mergedUsers, coverage });
+    } catch (e: any) {
+      console.error('[5B] load coverage failed', e);
+      showToast(e?.message || 'Failed to load rep coverage', 'error');
+    }
+  })();
+}, [session, regions]);
+
+  const can = useMemo(() => {
+    const role = session?.role;
+    return { reporting: role === "Admin" || role === "Manager", userMgmt: role === "Admin" };
+  }, [session]);
+
+  const handleLogin = (s: Session) => {
+    setSession(s);
+    setRoute("dealer-search");
+  };
+  const handleLogout = () => {
+    setSession(null);
+    setRoute("login");
+    showToast("You have been logged off.", "success");
+  };
+
+  const tasksForUser = useMemo(() => {
+    if (!session || session.role !== "Rep") return [];
+    return tasks.filter((t) => t.repUsername === session.username && !t.completedAtISO);
+  }, [tasks, session]);
+  // === Step 3A: Load live users from Supabase profiles (read-only) ===
+  // We merge profiles (role/status/email) into our local users list.
+  useEffect(() => {
+    // Only try after someone is logged in (so RLS knows who we are).
+    if (!session) return;
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, email, username, role, status");
+
+        if (error) throw error;
+
+        setUsers((prev) => {
+          const byUsername = new Map(prev.map((u) => [u.username.toLowerCase(), u]));
+          const next = [...prev];
+
+          for (const p of data || []) {
+            const pEmail = (p as any).email as string | null;
+            const pUsername =
+              ((p as any).username as string | undefined) ||
+              (pEmail ? pEmail.split("@")[0] : "");
+
+            const key = (pUsername || "").toLowerCase();
+            const existing = byUsername.get(key);
+
+            if (existing) {
+// NEW: carry over the real Supabase UUID so saves can target the row
+if ((p as any).id) (existing as any).id = (p as any).id as string;
+              existing.email = pEmail || existing.email;
+              existing.role = ((p as any).role || existing.role) as Role;
+              existing.status = ((p as any).status || existing.status) as UserStatus;
+            } else {
+              // Add a minimal new user record so the table can display it
+              next.push({
+                id: ((p as any).id as string) || uid(),
+                name: pUsername || pEmail || "User",
+                username: pUsername || (pEmail ? pEmail.split("@")[0] : "user"),
+                email: pEmail || undefined,
+                role: (((p as any).role as Role) ?? "Rep") as Role,
+                states: [],
+                regionsByState: {},
+                phone: "",
+                status: (((p as any).status as UserStatus) ?? "Active") as UserStatus,
+              });
+            }
+          }
+          return next;
+        });
+    
+      } catch (err) {
+        console.debug("[profiles] load failed", err);
+      }
+    })();
+  }, [session]); // runs after login; refresh page to re-sync
+  // === Step 4G: Load tasks from Supabase ===
+useEffect(() => {
+  if (!session) return;
+
+  const isAdminManager = session.role === 'Admin' || session.role === 'Manager';
+
+  (async () => {
+    const base = supabase
+      .from('dealer_tasks')
+      .select('id,dealer_id,rep_username,text,created_at,completed_at')
+      .order('created_at', { ascending: false });
+
+    const { data, error } = isAdminManager
+      ? await base
+      : await base.eq('rep_username', session.username);
+
+    if (error) {
+      showToast(error.message || 'Failed to load tasks', 'error');
+      return;
+    }
+
+    setTasks(
+      (data || []).map((r: any) => ({
+        id: r.id,
+        dealerId: r.dealer_id,
+        repUsername: r.rep_username,
+        text: r.text,
+        createdAtISO: r.created_at,
+        completedAtISO: r.completed_at || undefined,
+      }))
+    );
+  })();
+}, [session]);
+    // === Step 4B: Load dealers from Supabase after login (shared across devices) ===
+   // Sync "lastVisited" for each dealer from notes with category Visit/Visited
+const syncLastVisitedFromNotes = async () => {
+  try {
+    // 1) Pull the latest visited timestamp per dealer from Supabase notes
+    //    (accepts both "Visit" and "Visited" just in case)
+    const { data, error } = await supabase
+      .from("dealer_notes")
+      .select("dealer_id, category, created_at")
+      .in("category", ["Visit", "Visited"])
+      .order("created_at", { ascending: false }); // newest first
+    if (error) throw error;
+
+    // Build a map dealer_id -> latest ISO date (YYYY-MM-DD)
+    const latest: Record<string, string> = {};
+    for (const row of data || []) {
+      const id = String((row as any).dealer_id);
+      const ts = new Date((row as any).created_at).toISOString().slice(0, 10);
+      if (!latest[id]) latest[id] = ts; // first seen is newest due to order desc
+    }
+
+    // 2) Update local UI dealers immediately
+    setDealers((prev) =>
+      prev.map((d) => (latest[d.id] ? { ...d, lastVisited: latest[d.id] } : d))
+    );
+
+    // 3) Persist back to dealers table so list loads fast next time
+    const updates = Object.entries(latest).map(([dealerId, ymd]) => ({
+      id: dealerId,
+      last_visited: ymd,
+    }));
+    for (const u of updates) {
+      await supabase
+        .from("dealers")
+        .update({ last_visited: u.last_visited })
+        .eq("id", u.id);
+    }
+  } catch (e) {
+    console.debug("syncLastVisitedFromNotes failed", e);
+  }
+};
+
+    useEffect(() => {
+      if (!session) return;
+  
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from("dealers")
+            .select(
+              "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
+            );
+  
+          if (error) throw error;
+  
+          const fromDb: Dealer[] = (data || []).map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            state: r.state,
+            region: r.region,
+            type: r.type,
+            status: r.status,
+            address1: r.address1 || "",
+            address2: r.address2 || "",
+            city: r.city || "",
+            zip: r.zip || "",
+            contacts: Array.isArray(r.contacts) ? r.contacts : [],
+            assignedRepUsername: r.assigned_rep_username || undefined,
+            lastVisited: r.last_visited ? String(r.last_visited) : undefined, // keep YYYY-MM-DD
+            sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
+            noDealReasons: r.no_deal_reasons || undefined,
+          }));
+  
+          // Replace local dealers with the shared list
+          setDealers(fromDb);
+  
+          // Rebuild regions from dealers (existing behavior)
+const rebuilt: RegionsCatalog = {};
+for (const d of fromDb) {
+  if (!rebuilt[d.state]) rebuilt[d.state] = [];
+  if (!rebuilt[d.state].includes(d.region)) rebuilt[d.state].push(d.region);
+}
+for (const st of Object.keys(rebuilt)) rebuilt[st].sort();
+
+// NEW: also load curated regions from regions_catalog and MERGE
+const { data: cat, error: catErr } = await supabase
+  .from("regions_catalog")
+  .select("state,region");
+if (catErr) throw catErr;
+
+const fromCatalog: RegionsCatalog = {};
+for (const row of cat || []) {
+  const st = String((row as any).state || "").toUpperCase();
+  const rg = String((row as any).region || "");
+  if (!st || !rg) continue;
+  if (!fromCatalog[st]) fromCatalog[st] = [];
+  if (!fromCatalog[st].includes(rg)) fromCatalog[st].push(rg);
+}
+for (const st of Object.keys(fromCatalog)) fromCatalog[st].sort();
+
+// Merge both so manual entries survive refresh even if no dealers there yet
+const merged: RegionsCatalog = {};
+const allKeys = new Set([...Object.keys(fromCatalog), ...Object.keys(rebuilt)]);
+for (const st of allKeys) {
+  merged[st] = Array.from(new Set([...(fromCatalog[st] || []), ...(rebuilt[st] || [])])).sort();
+}
+setRegions(merged);
+await syncLastVisitedFromNotes();
+        } catch (err) {
+          console.debug("[dealers] load failed", err);
+        }
+      })();
+    }, [session]);  
+  const handleClickTask = (t: Task) => {
+    saveLS(LS_LAST_SELECTED_DEALER, t.dealerId);
+    setRoute("dealer-notes");
+    // NOTE: keep the alert until user completes inside Dealer Notes (do NOT auto-remove here)
+  };
+
+  let body: React.ReactNode = null;
+  if (route === "login") {
+    body = <LoginView onLogin={handleLogin} showToast={showToast} />;
+  } else {
+    if (!session) {
+      body = (
+        <div className="min-h-screen grid place-items-center bg-slate-50">
+          <div className="text-center">
+            <div className="text-2xl font-semibold text-slate-700 mb-2">Session expired</div>
+            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setRoute("login")}>
+              Return to Login
+            </button>
+          </div>
+        </div>
+      );
+    } else {
+      body = (
+        <div className="min-h-screen bg-slate-50">
+          <TopBar
+            session={session}
+            route={route}
+            setRoute={setRoute}
+            onLogout={handleLogout}
+            can={can}
+            tasksForUser={tasksForUser}
+            onClickTask={handleClickTask}
+          />
+          <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+            {route === "dealer-search" && (
+              <DealerSearchView
+                session={session}
+                users={users}
+                dealers={dealers}
+                setDealers={setDealers}
+                regions={regions}
+                setRegions={setRegions}
+                can={can}
+                setRoute={setRoute}
+                showToast={showToast}
+                tasksForUser={tasksForUser}
+                onClickTask={handleClickTask}
+                notes={notes}
+              />
+            )}
+
+            {route === "dealer-notes" && (
+              <DealerNotesView
+                session={session}
+                users={users}
+                dealers={dealers}
+                setDealers={setDealers}
+                notes={notes}
+                setNotes={setNotes}
+                tasks={tasks}
+                setTasks={setTasks}
+                regions={regions}
+                setRoute={setRoute}
+                showToast={showToast}
+              />
+            )}
+{route === "rep-route" && (
+  <RepRouteView
+    session={session}
+    users={users}
+    dealers={dealers}
+    notes={notes}
+    setRoute={setRoute}
+    showToast={showToast}
+  />
+)}
+            {route === "reporting" && <ReportingView dealers={dealers} users={users} notes={notes} />}
+            
+            {route === "user-management" && (
+              <UserManagementView
+                users={users}
+                setUsers={setUsers}
+                regions={regions}
+                setRegions={setRegions}
+                dealers={dealers}
+                setDealers={setDealers}
+                notes={notes}
+                showToast={showToast}
+              />
+            )}
+          </main>
+        </div>
+      );
+    }
+  }
+// Save Password for Supabase invite/recovery + activate local user + log them in
+const handleSaveNewPassword = async () => {
+  try {
+    // 1) Basic validation
+    if (!newPass || newPass.length < 8) {
+      showToast('Password must be at least 8 characters.', 'error');
+      return;
+    }
+    if (newPass !== newPass2) {
+      showToast('Passwords do not match.', 'error');
+      return;
+    }
+
+    // 2) Update password in Supabase (token already signed-in from invite/recovery)
+    const { error } = await supabase.auth.updateUser({ password: newPass });
+    if (error) throw error;
+
+   // 3) Identify which app user this is (no extra network call needed)
+const emailLower = (resetEmail || '').toLowerCase();
+const local = emailLower.split('@')[0] || '';
+const candidates = [resetUsername.toLowerCase(), emailLower, local].filter(Boolean);
+
+// 4) Find the user in your in-memory list by any of the candidates
+const u =
+  (Array.isArray(users) &&
+    users.find((x: any) => {
+      const uname = (x?.username || '').toLowerCase();
+      const em = (x?.email || '').toLowerCase();
+      return candidates.includes(uname) || candidates.includes(em);
+    })) ||
+  null;
+
+    // 5) If we can’t map them, still finish gracefully (they can log in manually)
+    if (!u) {
+      showToast('Password set. Please log in with your username.', 'success');
+      setShowForceReset(false);
+      setNewPass('');
+      setNewPass2('');
+      setRoute('login');
+      return;
+    }
+
+    // 6) Store password locally so your Login screen accepts it (username → password)
+    //    These helpers/constants already exist in your app; if TS complains, keep the casts.
+    const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
+    pwMap[u.username] = newPass;                       // original case
+    pwMap[u.username.toLowerCase()] = newPass;         // case-insensitive login
+    saveLS(LS_PASSWORDS, pwMap);    
+
+    // 7) Mark the user Active in your local list and ensure email is saved
+    //    If your status field is named differently (e.g., is_active), tweak here.
+    setUsers((prev: any[]) =>
+      prev.map((x: any) =>
+        x.id === u.id
+          ? {
+              ...x,
+              status: 'Active' as UserStatus,
+              email: x.email || resetEmail,
+            }
+          : x
+      )
+    );
+
+    // 8) Close modal, clear fields, create a session, and route to Home
+    setShowForceReset(false);
+    setNewPass('');
+    setNewPass2('');
+
+    setSession({ username: u.username, role: u.role });
+    setRoute('dealer-search'); // your Home screen
+
+    showToast('Password set. You are logged in.', 'success');
+  } catch (e: any) {
+    showToast(e?.message || 'Failed to set password', 'error');
+  }
+};
+  return (
+    <>
+      {body}
+      <ToastHost toasts={toasts} dismiss={dismiss} />
+      {showForceReset && (
+  <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
+    <div className="grid gap-3">
+      <p className="text-sm text-slate-500">
+        Welcome! Please create your password to finish setting up your account.
+      </p>
+{/* Read-only identity fields */}
+<TextField
+  label="Username"
+  value={resetUsername || '(loading…)'}
+  onChange={() => {}}
+  disabled
+/>
+<TextField
+  label="Email"
+  value={resetEmail || ''}
+  onChange={() => {}}
+  disabled
+/>
+{/* Trouble helper: resend a secure reset email */}
+<div className="rounded-lg border p-3 bg-slate-50 text-slate-700">
+  <div className="text-xs mb-2">
+    Having trouble? We can resend a secure reset link to your email.
+  </div>
+  <button
+    type="button"
+    className="px-3 py-1.5 rounded-lg border hover:bg-white"
+    onClick={async () => {
+      let email = (resetEmail || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) {
+        const typed = window.prompt("Type your email to resend the secure reset link:");
+        if (!typed) return;
+        email = typed.trim().toLowerCase();
+      }
+      try {
+        const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) throw error;
+        showToast("Secure reset email sent.", "success");
+      } catch (e: any) {
+        showToast(e?.message || "Could not send reset email.", "error");
+      }
+    }}
+  >
+    Resend secure reset email
+  </button>
+</div>
+      <TextField
+        label="New Password"
+        type="password"
+        value={newPass}
+        onChange={(v) => setNewPass(v)}
+      />
+
+      <TextField
+        label="Confirm Password"
+        type="password"
+        value={newPass2}
+        onChange={(v) => setNewPass2(v)}
+      />
+
+      <div className="flex gap-2 justify-end">
+        <button
+          className="px-3 py-2 rounded-lg border"
+          onClick={() => setShowForceReset(false)}
+        >
+          Cancel
+        </button>
+        <button
+          className="px-3 py-2 rounded-lg bg-blue-600 text-white"
+          onClick={handleSaveNewPassword}
+        >
+          Save Password
+        </button>
+      </div>
+    </div>
+  </Modal>
+)}
+      {resetOpen && (
+        <ResetInviteModal
+          token={resetToken}
+          onClose={() => setResetOpen(false)}
+          users={users}
+          setUsers={setUsers}
+          showToast={showToast}
+        />
+      )}
+    </>
   );
 };
-export default App;
+
+/* ----------------------------- Shared UI Bits ----------------------------- */
+
+const Card: React.FC<{ title: string; subtitle?: string; children?: React.ReactNode }> = ({ title, subtitle, children }) => (
+  <div className="rounded-xl border bg-white p-3 md:p-5 shadow-sm">
+    <div className="mb-2 md:mb-3">
+      <div className="text-slate-800 font-semibold">{title}</div>
+      {subtitle && <div className="text-slate-500 text-xs md:text-sm mt-0.5">{subtitle}</div>}
+    </div>
+    {children}
+  </div>
+);
+
+const KPI: React.FC<{ title: string; value: number | string }> = ({ title, value }) => (
+  <div className="rounded-xl border bg-white p-3 md:p-5 shadow-sm">
+    <div className="text-slate-500 text-[11px] md:text-sm tracking-wide uppercase">{title}</div>
+    <div className="mt-1 text-[22px] md:text-2xl leading-tight font-semibold text-slate-800">{value}</div>
+  </div>
+);
+
+const PlaceholderCard: React.FC<{ title: string; description?: string }> = ({ title, description }) => (
+  <div className="rounded-xl border bg-white p-6 shadow-sm">
+    <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+    {description && <p className="mt-2 text-slate-600 text-sm">{description}</p>}
+  </div>
+);
+
+const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => {
+  // Close on ESC
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={title}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+
+      {/* Container: bottom sheet on phones, centered dialog on desktop */}
+      <div className="absolute inset-0 flex items-end md:items-center justify-center p-0 md:p-4">
+        {/* Panel */}
+        <div className="w-full md:max-w-4xl bg-white shadow-xl md:rounded-2xl overflow-hidden flex flex-col h-[92vh] md:h-auto md:max-h-[90vh]">
+          {/* Sticky header with close button */}
+          <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white z-10">
+            <div className="text-slate-800 font-semibold truncate">{title}</div>
+            <button
+              onClick={onClose}
+              className="text-slate-500 hover:text-slate-700 px-2 py-1 rounded"
+              aria-label="Close"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Scrollable content area (phone-safe) */}
+          <div className="p-4 overflow-y-auto overscroll-contain flex-1">
+            {children}
+          </div>
+
+          {/* Optional footer shadow on iOS when content stops behind home bar (visual nicety) */}
+          <div className="md:hidden pointer-events-none h-3 bg-gradient-to-t from-white to-transparent" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TextField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  type?: string;
+}> = ({ label, value, onChange, placeholder, disabled, type }) => {
+  return (
+    <label className="block">
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      <input
+        disabled={disabled}
+        type={type || "text"}
+        className={`w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 ${disabled ? "bg-slate-100 text-slate-400" : ""}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+};
+
+const SelectField: React.FC<{
+  label: string;
+  value: string | number;
+  onChange: (v: string) => void;
+  options: { label: string; value: string | number }[];
+  disabled?: boolean;
+}> = ({ label, value, onChange, options, disabled }) => {
+  // Mobile popover state
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / ESC
+  React.useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  // label text for current value
+  const current =
+    options.find((o) => String(o.value) === String(value))?.label ?? "";
+
+  return (
+    <label className="block">
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+
+      {/* Desktop / tablets: keep native select */}
+      <select
+        disabled={disabled}
+        className={`hidden md:block w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 ${
+          disabled ? "bg-slate-100 text-slate-400" : ""
+        }`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((o) => (
+          <option key={`${o.value}`} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Mobile: custom popover anchored to the field */}
+      <div ref={wrapRef} className="relative md:hidden">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => !disabled && setOpen((s) => !s)}
+          className={`w-full rounded-lg border px-3 py-2 text-left outline-none focus:ring-2 focus:ring-blue-500 ${
+            disabled ? "bg-slate-100 text-slate-400" : "bg-white"
+          }`}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+        >
+          <span className={current ? "text-slate-800" : "text-slate-400"}>
+            {current || "Select…"}
+          </span>
+        </button>
+
+        {open && !disabled && (
+          <div
+            role="listbox"
+            className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-xl border bg-white shadow-lg max-h-64 overflow-y-auto"
+          >
+            {options.map((o) => {
+              const selected = String(o.value) === String(value);
+              return (
+                <button
+                  key={`${o.value}`}
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => {
+                    onChange(String(o.value));
+                    setOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-base ${
+                    selected
+                      ? "bg-blue-50 text-blue-700"
+                      : "hover:bg-slate-50 text-slate-800"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </label>
+  );
+};
+
+/* ---------------------------- Reset Invite Modal -------------------------- */
+/**
+ * New behavior:
+ * - Read token -> invite map (LS_INVITES) to find the target user
+ * - Prefill read-only: Full Name, Username, Phone
+ * - Only allow setting New Password (+ confirm)
+ * - On save: store to LS_PASSWORDS[username] = new password
+ *            remove token from LS_INVITES
+ *            mark user Active (via status map) so they can log in
+ */
+const LS_DISABLED_PASSWORDS = "demo_passwords_disabled"; // username -> password (when Inactive)
+const LS_USER_STATUS = "demo_user_status"; // username -> "Active" | "Inactive"
+
+const ResetInviteModal: React.FC<{
+  token: string;
+  onClose: () => void;
+  users: User[];
+  setUsers: React.Dispatch<React.SetStateAction<User[]>>;
+  showToast: (m: string, k?: ToastKind) => void;
+}> = ({ token, onClose, users, setUsers, showToast }) => {
+  const invites = loadLS<InviteMap>(LS_INVITES, {});
+  const pw = loadLS<PasswordMap>(LS_PASSWORDS, {});
+  const statusMap = loadLS<Record<string, "Active" | "Inactive">>(LS_USER_STATUS, {});
+
+  const invite = token ? invites[token] : undefined;
+  const user = invite ? users.find((u) => u.id === invite.userId) || null : null;
+
+  const [pwd, setPwd] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const doReset = () => {
+    if (!token || !invite || !user) return showToast("Invalid or expired invite link.", "error");
+    if (!pwd) return showToast("Please enter a new password.", "error");
+    if (pwd !== confirm) return showToast("Passwords do not match.", "error");
+
+    // Set password (replaces any previous)
+    const nextPw: PasswordMap = { ...pw, [user.username]: pwd };
+    saveLS(LS_PASSWORDS, nextPw);
+
+    // Mark Active (and ensure any disabled pw copy is removed)
+    const disabledMap = loadLS<Record<string, string>>(LS_DISABLED_PASSWORDS, {});
+    if (disabledMap[user.username]) {
+      delete disabledMap[user.username];
+      saveLS(LS_DISABLED_PASSWORDS, disabledMap);
+    }
+    const nextStatus = { ...statusMap, [user.username]: "Active" as const };
+    saveLS(LS_USER_STATUS, nextStatus);
+
+    // Remove invite token (one-time use)
+    const nextInv = { ...invites };
+    delete nextInv[token];
+    saveLS(LS_INVITES, nextInv);
+
+    showToast("Password set. You can now log in.", "success");
+    onClose();
+  };
+
+  return (
+    <Modal title="Create Your Account" onClose={onClose}>
+      {!user ? (
+        <div className="text-sm text-red-600">This invite link is invalid or has expired.</div>
+      ) : (
+        <div className="space-y-3">
+          {/* NOTE: per request, no token text shown */}
+          <div className="grid md:grid-cols-2 gap-3">
+            <TextField label="Full Name" value={user.name} onChange={() => {}} disabled />
+            <TextField label="Username" value={user.username} onChange={() => {}} disabled />
+            <TextField label="Phone" value={user.phone || ""} onChange={() => {}} disabled />
+            <TextField label="New Password" type="password" value={pwd} onChange={setPwd} />
+            <TextField label="Confirm New Password" type="password" value={confirm} onChange={setConfirm} />
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50" onClick={onClose}>
+              Cancel
+            </button>
+            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={doReset}>
+              Create Account
+            </button>
+          </div>
+          <div className="text-xs text-slate-500">
+            After setting your password, return to the login screen to sign in.
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+};
+/* ------------------------------- Rep Route -------------------------------- */
+
+type RepRouteViewProps = {
+  session: Session;
+  users: User[];
+  dealers: Dealer[];
+  notes: Note[];
+  setRoute: (r: RouteKey) => void;
+  showToast: (m: string, k?: ToastKind) => void;
+};
+
+const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
+  const { session, users, dealers, notes, setRoute, showToast } = props;
+
+  // find current profile; gate to Reps only
+  const me = users.find((u) => u.username === session?.username) || null;
+  const isRep = session?.role === "Rep";
+  if (!isRep) {
+    return <div className="p-6 text-center text-slate-600">This page is only for reps.</div>;
+  }
+
+  // LS key helper
+  const routeKeyForUser = (username?: string | null) => `${LS_REP_ROUTE}_${username || "anon"}`;
+
+  // types
+  type RouteStop = { dealerId: string; position: number };
+  type RouteByDate = Record<string, RouteStop[]>;
+
+  // state
+  const [dateStr, setDateStr] = useState<string>(todayISO());
+  const [routeByDate, setRouteByDate] = useState<RouteByDate>({});
+
+  // load today’s route from Supabase
+  useEffect(() => {
+    if (!me?.id) return;
+    let isCancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("dealer_routes")
+        .select("dealer_id, position")
+        .eq("user_id", me.id)
+        .eq("date", dateStr)
+        .order("position", { ascending: true });
+
+      if (error) {
+        console.error("load route error:", error);
+        return;
+      }
+      if (isCancelled) return;
+
+      const rows: RouteStop[] = (data ?? []).map((r: any) => ({
+        dealerId: r.dealer_id,
+        position: r.position ?? 1,
+      }));
+      setRouteByDate((prev) => ({ ...prev, [dateStr]: rows }));
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [dateStr, me?.id]);
+
+  // which dealers can this rep see?
+  const accessibleDealers = useMemo(() => {
+    if (!me) return [] as Dealer[];
+    const can = (d: Dealer) => {
+      const assigned = d.assignedRepUsername === me.username;
+      const coversState = !!me.states?.includes?.(d.state);
+      const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
+      return assigned || (coversState && coversRegion);
+    };
+    return dealers.filter(can);
+  }, [dealers, me]);
+
+  // filters
+  const unique = (arr: (string | undefined)[]) =>
+    Array.from(new Set(arr.filter(Boolean) as string[])).sort();
+
+  const states = useMemo(() => unique(accessibleDealers.map((d) => d.state)), [accessibleDealers]);
+  const regions = useMemo(() => unique(accessibleDealers.map((d) => d.region)), [accessibleDealers]);
+  const cities = useMemo(() => unique(accessibleDealers.map((d) => d.city)), [accessibleDealers]);
+
+  const [q, setQ] = useState("");
+  const [state, setState] = useState("");
+  const [region, setRegion] = useState("");
+  const [city, setCity] = useState("");
+  const [openSug, setOpenSug] = useState(false);
+  // current route (for selected date)
+  const route: RouteStop[] = routeByDate[dateStr] || [];
+  const routeIds = new Set(route.map((r) => r.dealerId));
+
+  // filtered search results
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return accessibleDealers.filter((d) => {
+      if (state && d.state !== state) return false;
+      if (region && d.region !== region) return false;
+      if (city && d.city !== city) return false;
+      if (qq.length < 2) return false;
+      const hay = `${d.name} ${d.city} ${d.region}`.toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [accessibleDealers, q, state, region, city]);
+  const mobileSuggestions = useMemo(() => filtered.slice(0, 8), [filtered]);
+
+  // helpers
+  const saveLS = (k: string, v: any) => localStorage.setItem(k, JSON.stringify(v));
+  const loadLS = <T,>(k: string, fallback: T): T => {
+    try {
+      const s = localStorage.getItem(k);
+      return s ? (JSON.parse(s) as T) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  // persist route map per-user
+  useEffect(() => {
+    saveLS(routeKeyForUser(session?.username), routeByDate);
+  }, [routeByDate, session?.username]);
+
+  // add dealer to today’s route (local + supabase)
+  const addDealer = async (d: Dealer) => {
+    setRouteByDate((prev) => {
+      const current = prev[dateStr] || [];
+      if (current.some((r) => r.dealerId === d.id)) return prev;
+      const nextPos = current.length ? Math.max(...current.map((r) => r.position || 0)) + 1 : 1;
+      const next = [...current, { dealerId: d.id, position: nextPos }];
+      return { ...prev, [dateStr]: next };
+    });
+
+    // upsert (ignore conflict via UNIQUE)
+    const { error } = await supabase
+      .from("dealer_routes")
+      .upsert(
+        {
+          user_id: me!.id,
+          dealer_id: d.id,
+          date: dateStr,
+          position: (routeByDate[dateStr]?.length || 0) + 1,
+        },
+        { onConflict: "user_id,date,dealer_id" }
+      );
+
+    if (error) {
+      console.error("add route upsert error:", error);
+      showToast("Saved locally, but sync failed. Try again.", "error");
+      return;
+    }
+
+    showToast("Added to route.", "success");
+  };
+
+  // remove dealer
+  const removeDealer = async (dealerId: string) => {
+    setRouteByDate((prev) => {
+      const next = (prev[dateStr] || []).filter((r) => r.dealerId !== dealerId);
+      return { ...prev, [dateStr]: next };
+    });
+
+    const { error } = await supabase
+      .from("dealer_routes")
+      .delete()
+      .eq("user_id", me!.id)
+      .eq("date", dateStr)
+      .eq("dealer_id", dealerId);
+
+    if (error) {
+      console.error("remove route error:", error);
+      showToast("Removed locally, but sync failed.", "error");
+      return;
+    }
+    showToast("Removed from route.", "success");
+  };
+
+  // move up/down
+  const move = async (dealerId: string, dir: "up" | "down") => {
+    setRouteByDate((prev) => {
+      const curr = [...(prev[dateStr] || [])];
+      const i = curr.findIndex((r) => r.dealerId === dealerId);
+      if (i < 0) return prev;
+      const j = dir === "up" ? i - 1 : i + 1;
+      if (j < 0 || j >= curr.length) return prev;
+      [curr[i], curr[j]] = [curr[j], curr[i]];
+      // re-number positions 1..N
+      const renum = curr.map((r, idx) => ({ dealerId: r.dealerId, position: idx + 1 }));
+      return { ...prev, [dateStr]: renum };
+    });
+
+    // best-effort position sync
+    const curr = routeByDate[dateStr] || [];
+    const idx = curr.findIndex((r) => r.dealerId === dealerId);
+    const targetIndex = dir === "up" ? idx - 1 : idx + 1;
+    const pair = [curr[idx]?.dealerId, curr[targetIndex]?.dealerId].filter(Boolean) as string[];
+    for (let k = 0; k < pair.length; k++) {
+      const id = pair[k];
+      // new position equals its new index + 1 after swap
+      const newPos = dir === "up" ? (id === dealerId ? idx : targetIndex) : (id === dealerId ? idx + 2 : idx + 1);
+      await supabase
+        .from("dealer_routes")
+        .update({ position: newPos })
+        .eq("user_id", me!.id)
+        .eq("date", dateStr)
+        .eq("dealer_id", id);
+    }
+  };
+
+  // clear the whole day
+  const clearDay = async () => {
+    const current = routeByDate[dateStr] || [];
+    if (!current.length) return;
+    if (!confirm("Clear all stops for this day?")) return;
+
+    setRouteByDate((prev) => ({ ...prev, [dateStr]: [] }));
+
+    const { error } = await supabase
+      .from("dealer_routes")
+      .delete()
+      .eq("user_id", me!.id)
+      .eq("date", dateStr);
+
+    if (error) {
+      console.error("clear day error:", error);
+      showToast("Cleared locally, but sync failed.", "error");
+      return;
+    }
+  };
+
+  // export + copy helpers (addresses only)
+  const exportCSV = () => {
+    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const rows: (string | number)[][] = [["Dealer", "Address1", "Address2", "City", "State", "Zip", "Region"]];
+    for (const r of sorted) {
+      const d = dealers.find((x) => x.id === r.dealerId);
+      rows.push([
+        d?.name || "",
+        d?.address1 || "",
+        d?.address2 || "",
+        d?.city || "",
+        d?.state || "",
+        d?.zip || "",
+        d?.region || "",
+      ]);
+    }
+    const csv = rows.map((row) => row.map((v) => `${String(v).replace(/"/g, '""')}`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rep-route-${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const copyAll = async () => {
+    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const lines = sorted
+      .map((r) => {
+        const d = dealers.find((x) => x.id === r.dealerId);
+        return [d?.name, d?.address1, d?.address2, d?.city, d?.state, d?.zip]
+        .filter(Boolean)
+        .join(", ");
+      })
+      .join("\n");
+    await navigator.clipboard.writeText(lines);
+    showToast("Route (name + address) copied.", "success");
+  };
+
+  // navigation to a dealer’s notes page
+  // Build a Google Maps URL for a dealer address
+const mapUrl = (d: Dealer) => {
+  const q = [d.name, d.address1, d.address2, d.city, d.state, d.zip]
+    .filter(Boolean)
+    .join(", ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+};
+
+  const viewDealer = (dealerId: string) => {
+    saveLS(LS_LAST_SELECTED_DEALER, dealerId);
+    setRoute("dealer-notes");
+  };
+
+  // action button class (mobile-friendly)
+  const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
+
+  // --- render ---
+  const sortedRoute = [...route].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+  // Daily Summary modal state
+  const [dailyOpen, setDailyOpen] = useState(false);
+
+  // Precompute daily notes for this rep + date
+  const todaysDealerIds = new Set(sortedRoute.map((r) => r.dealerId));
+  // Summary range (like Home): today / yesterday / last 7 days (relative to dateStr)
+const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7">("today");
+
+// Compute start/end labels (string-based so we can compare with YYYY-MM-DD)
+const { startStr, endStr, rangeLabel } = useMemo(() => {
+  const addDaysStr = (isoDate: string, delta: number) => {
+    const d = new Date(`${isoDate}T00:00:00`);
+    d.setDate(d.getDate() + delta);
+    return d.toISOString().slice(0, 10);
+  };
+
+  if (summaryRange === "yesterday") {
+    const y = addDaysStr(dateStr, -1);
+    return { startStr: y, endStr: y, rangeLabel: y };
+  }
+
+  if (summaryRange === "7") {
+    const start = addDaysStr(dateStr, -6); // inclusive 7 days, end = dateStr
+    return { startStr: start, endStr: dateStr, rangeLabel: `${start} – ${dateStr}` };
+  }
+
+  // today
+  return { startStr: dateStr, endStr: dateStr, rangeLabel: dateStr };
+}, [dateStr, summaryRange]);
+
+  const todaysNotes = useMemo(
+    () =>
+      notes.filter((n) => {
+        const d = dealers.find((x) => x.id === n.dealerId);
+        if (!d) return false;
+        if (!todaysDealerIds.has(n.dealerId)) return false;
+// in selected range (string compare works for YYYY-MM-DD)
+const day = (n.tsISO || "").slice(0, 10);
+return day >= startStr && day <= endStr;
+      }),
+    [notes, dealers, sortedRoute, dateStr]
+  );
+// Copy today's notes (same behavior as Home)
+const copyDailySummary = async () => {
+  const lines = todaysNotes
+    .map(n => {
+      const d = dealers.find(x => x.id === n.dealerId);
+      const when = (n.tsISO || "").slice(11, 16); // HH:MM
+      return `• ${d?.name ?? "Unknown"} (${d?.region ?? ""}, ${d?.state ?? ""}) — ${n.category} by ${n.authorUsername}${when ? ` at ${when}` : ""}\n  ${n.text}`;
+    })
+    .join("\n\n");
+
+  await navigator.clipboard.writeText(lines || `No notes for ${dateStr}.`);
+  showToast("Summary copied.", "success");
+};
+
+// Export today's notes to CSV (same behavior as Home)
+const exportDailySummaryCSV = () => {
+  const rows: (string | number)[][] = [
+    ["Date","Dealer","Region","State","Category","Author","Note"]
+  ];
+  for (const n of todaysNotes) {
+    const d = dealers.find(x => x.id === n.dealerId);
+    rows.push([
+      dateStr,
+      d?.name || "",
+      d?.region || "",
+      d?.state || "",
+      n.category || "",
+      n.authorUsername || "",
+      (n.text || "").replace(/\n/g, " ")
+    ]);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `daily-summary-${dateStr}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+<div className="flex items-center gap-2 flex-wrap">
+  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+  <button
+    onClick={() => setDailyOpen(true)}
+    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
+    title="Show notes summary"
+  >
+    <span className="inline-block -ml-1">📄</span>
+    Daily Summary
+  </button>
+</div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={dateStr}
+            onChange={(e) => setDateStr(e.target.value)}
+            className="border rounded-lg px-3 py-2"
+            title="Pick a day"
+          />
+          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>
+            Clear Day
+          </button>
+          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>
+            Export CSV
+          </button>
+          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
+            Copy All
+          </button>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Find your dealers</h2>
+          <span className="text-sm text-slate-500">
+  {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
+</span>
+        </div>
+
+        <div className="md:col-span-2 relative">
+  <input
+    value={q}
+    onChange={(e) => { setQ(e.target.value); setOpenSug(true); }}
+    onFocus={() => setOpenSug(true)}
+    onBlur={() => setTimeout(() => setOpenSug(false), 150)}
+    placeholder="Search dealers (name, city, region)…"
+    className="w-full border rounded-lg px-3 py-2"
+  />
+
+  {/* Mobile suggestions dropdown (mobile only) */}
+  {openSug && q.trim().length >= 2 && mobileSuggestions.length > 0 && (
+  <div className="md:hidden absolute z-20 left-0 right-0 mt-1 max-h-64 overflow-auto bg-white border rounded-lg shadow">
+    {mobileSuggestions.map((d) => (
+      <button
+        key={d.id}
+        className="w-full text-left px-3 py-2 hover:bg-slate-50"
+        onMouseDown={(e) => e.preventDefault()}  // keep input focused so click works
+        onClick={() => { addDealer(d); setOpenSug(false); }}
+      >
+        <div className="font-medium">{d.name}</div>
+        <div className="text-xs text-slate-500">
+          {[d.city, d.state].filter(Boolean).join(", ")}
+          {d.region ? ` · ${d.region}` : ""}
+        </div>
+        {d.lastVisited && (
+          <div className="text-[11px] text-slate-400">Last Visited: {d.lastVisited}</div>
+        )}
+      </button>
+    ))}
+  </div>
+)}
+</div>
+          <select className="border rounded-lg px-3 py-2" value={state} onChange={(e) => setState(e.target.value)}>
+            <option value="">All States</option>
+            {states.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+
+          <select className="border rounded-lg px-3 py-2" value={region} onChange={(e) => setRegion(e.target.value)}>
+            <option value="">All Regions</option>
+            {regions.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+
+          <select className="border rounded-lg px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)}>
+            <option value="">All Cities</option>
+            {cities.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {filtered.length === 0 && (
+  <div className="p-6 text-center text-slate-500">
+    {q.trim().length < 2
+      ? "Start typing to search (min 2 letters)."
+      : "No results. Try different filters."}
+  </div>
+)}
+      </div>
+  )
+      {/* Search Results */}
+      <div className="space-y-2">
+        {filtered.map((d) => {
+          const inRoute = routeIds.has(d.id);
+          return (
+            <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
+              <div>
+                <div className="font-semibold">{d.name}</div>
+                <div className="text-sm text-slate-600">
+                  {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
+                </div>
+                <div className="text-xs text-slate-500">{d.region}</div>
+                <div className="text-xs text-slate-500">Last Visited: {d.lastVisited || "—"}</div>
+              </div>
+              <div className="flex gap-2">
+                <button className={`${actionBtn}`} disabled={inRoute} onClick={() => addDealer(d)}>
+                  {inRoute ? "Added" : "Add"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Route List */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Route for {dateStr}</h2>
+          <span className="text-sm text-slate-500">{sortedRoute.length} stop(s)</span>
+        </div>
+
+        {sortedRoute.length === 0 ? (
+          <div className="p-6 text-center text-slate-500">No dealers in the route yet. Add some from above.</div>
+        ) : (
+          <div className="space-y-2">
+            {sortedRoute.map((r, idx) => {
+              const d = dealers.find((x) => x.id === r.dealerId);
+              return (
+                <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <div>
+                    <div className="font-semibold">{idx + 1}. {d?.name || "(dealer removed)"}</div>
+                    <div className="text-sm text-slate-600">
+                      {[d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ")}
+                    </div>
+                    <div className="text-xs text-slate-500">{d?.region || ""}</div>
+                    <div className="text-xs text-slate-500">Last Visited: {d?.lastVisited || "—"}</div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
+                    <a
+                      href={d ? mapUrl(d) : "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`${actionBtn}`}
+                    >
+                      Maps
+                    </a>
+                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
+                    <button className={actionBtn} onClick={() => move(r.dealerId, "up")}>&uarr;</button>
+                    <button className={actionBtn} onClick={() => move(r.dealerId, "down")}>&darr;</button>
+                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Daily Summary modal */}
+      {dailyOpen && (
+        <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
+          <div className="space-y-4">
+            {/* Bar: date + actions (Copy / Export) */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="text-sm text-slate-600">
+                  Showing notes for <span className="font-semibold">{rangeLabel}</span>
+                </div>
+      
+                {/* Range selector (same behavior as Home) */}
+                <select
+                  className="border rounded-lg px-2 py-1 text-sm"
+                  value={summaryRange}
+                  onChange={(e) => setSummaryRange(e.target.value as "today" | "yesterday" | "7")}
+                  title="Choose range"
+                >
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="7">Last 7 days</option>
+                </select>
+              </div>
+      
+              <div className="flex items-center gap-2">
+                <button className="px-3 py-2 rounded-lg border" onClick={copyDailySummary}>
+                  Copy
+                </button>
+                <button className="px-3 py-2 rounded-lg border" onClick={exportDailySummaryCSV}>
+                  Export CSV
+                </button>
+              </div>
+            </div>
+      
+            {/* Notes list */}
+            <div className="divide-y">
+              {todaysNotes.length === 0 && (
+                <div className="p-4 text-center text-slate-500">No notes for today.</div>
+              )}
+      
+              {todaysNotes.map((n) => {
+                const d = dealers.find((x) => x.id === n.dealerId);
+                return (
+                  <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
+                    <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
+                    <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
+                    <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
+                      {n.category}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mb-1">
+                      by {n.authorUsername} {(n.tsISO || "").slice(11, 16)}
+                    </div>
+                    <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
+                  </div>
+                );
+              })}
+            </div>
+      
+            {/* Close */}
+            <div className="mt-4 flex items-center justify-end">
+              <button
+                className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+                onClick={() => setDailyOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+        )}
+      }
+      export default App;
