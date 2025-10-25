@@ -93,15 +93,17 @@ type Dealer = {
     other?: string;
   };
 };
-
+/* ----------------- Note type (extended for optimistic UI) ----------------- */
 type NoteCategory = "Visit" | "Problem" | "Other" | "Manager";
 type Note = {
-  id: string;
+  id: string;                 // can be temp like "temp_..."
   dealerId: string;
   authorUsername: string;
   tsISO: string;
   category: NoteCategory;
   text: string;
+  pending?: boolean;          // true while saving
+  failed?: boolean;           // true if last save failed
 };
 
 type Task = {
@@ -239,28 +241,47 @@ seedIfNeeded();
 
 /* --------------------------------- Toasts --------------------------------- */
 type ToastKind = "success" | "error" | "info";
-type Toast = { id: string; kind: ToastKind; message: string };
+
+type Toast = {
+  id: string;
+  kind: ToastKind;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
+};
 
 const useToasts = () => {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timers = useRef<Record<string, number>>({});
 
+  const uid = () => Math.random().toString(36).slice(2);
+
   const showToast = (message: string, kind: ToastKind = "success") => {
     const id = uid();
-    setToasts((prev) => [{ id, kind, message }, ...prev]);
+    setToasts((p) => [{ id, kind, message }, ...p]);
     const timeout = window.setTimeout(() => dismiss(id), 3500);
     timers.current[id] = timeout as unknown as number;
   };
 
+  const showActionToast = (t: Omit<Toast, "id">) => {
+    const id = uid();
+    setToasts((p) => [{ id, ...t }, ...p]);
+    const timeout = window.setTimeout(() => dismiss(id), 8000);
+    timers.current[id] = timeout as unknown as number;
+    return id;
+  };
+
   const dismiss = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((p) => p.filter((t) => t.id !== id));
     if (timers.current[id]) {
       clearTimeout(timers.current[id]);
       delete timers.current[id];
     }
   };
 
-  return { toasts, showToast, dismiss };
+  return { toasts, showToast, showActionToast, dismiss };
 };
 
 const ToastHost: React.FC<{ toasts: Toast[]; dismiss: (id: string) => void }> = ({ toasts, dismiss }) => (
@@ -269,13 +290,27 @@ const ToastHost: React.FC<{ toasts: Toast[]; dismiss: (id: string) => void }> = 
       <div
         key={t.id}
         className={`min-w-[260px] max-w-sm rounded-lg shadow-lg p-3 text-sm text-white flex items-start gap-2 ${
-          t.kind === "success" ? "bg-green-600" : "bg-red-600"
+          t.kind === "success" ? "bg-green-600" : t.kind === "info" ? "bg-slate-700" : "bg-red-600"
         }`}
       >
-        <div className="flex-1">{t.message}</div>
-        <button className="opacity-80 hover:opacity-100 transition" onClick={() => dismiss(t.id)} title="Close">
-          ✕
-        </button>
+        <div className="flex-1 whitespace-pre-wrap">{t.message}</div>
+        {t.actionLabel && (
+          <button
+            className="underline text-xs ml-2"
+            onClick={() => { dismiss(t.id); t.onAction?.(); }}
+          >
+            {t.actionLabel}
+          </button>
+        )}
+        {t.secondaryLabel && (
+          <button
+            className="underline text-xs ml-2"
+            onClick={() => { dismiss(t.id); t.onSecondary?.(); }}
+          >
+            {t.secondaryLabel}
+          </button>
+        )}
+        <button className="opacity-90 hover:opacity-100" title="Close" onClick={() => dismiss(t.id)}>✕</button>
       </div>
     ))}
   </div>
@@ -1667,7 +1702,8 @@ const DealerNotesView: React.FC<{
   regions: RegionsCatalog;
   setRoute: (r: RouteKey) => void;
   showToast: (m: string, k?: ToastKind) => void;
-}> = ({ session, users, dealers, setDealers, notes, setNotes, tasks, setTasks, regions, setRoute, showToast }) => {
+  showActionToast: (t: Omit<Toast, "id">) => string;
+}> = ({ session, users, dealers, setDealers, notes, setNotes, tasks, setTasks, regions, setRoute, showToast, showActionToast }) => {
   const dealerId = loadLS<string | null>(LS_LAST_SELECTED_DEALER, null);
   const dealer = dealers.find((d) => d.id === dealerId) || null;
   const me = users.find((u) => u.username === session?.username) || null;
@@ -1959,22 +1995,36 @@ const addNote = async () => {
   const text = (noteText || "").trim();
   if (!text) return showToast("Please enter a note.", "error");
 
-  // Get the currently logged-in auth user (has the real auth.uid())
+  // Get logged-in user (for RLS user_id = auth.uid)
   const { data: authData, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !authData?.user) {
-    return showToast("You're not signed in. Please log in again.", "error");
-  }
+  if (authErr || !authData?.user) return showToast("You're not signed in.", "error");
   const authUserId = authData.user.id;
 
-  try {
-    // 1) Insert the note (RLS expects user_id = auth.uid())
+  // Create a temp optimistic note
+  const tempId = `temp_${Date.now()}`;
+  const optimistic: Note = {
+    id: tempId,
+    dealerId: dealer.id,
+    authorUsername: session?.username || "",
+    tsISO: new Date().toISOString(),
+    category: noteCategory,
+    text,
+    pending: true,
+  };
+
+  // 1️⃣  Show immediately
+  setNotes(prev => [optimistic, ...prev]);
+  setNoteText("");
+
+  // Helper that actually saves
+  const saveOnce = async () => {
     const payload = {
       dealer_id: dealer.id,
-      user_id: authUserId,                           // ✅ important: NOT session!.id
-      author_username: session?.username || "",
+      user_id: authUserId,
+      author_username: optimistic.authorUsername,
       category: noteCategory,
-      text: text,
-      created_at: new Date().toISOString(),
+      text,
+      created_at: optimistic.tsISO,
     };
 
     const { data, error } = await supabase
@@ -1982,77 +2032,43 @@ const addNote = async () => {
       .insert([payload])
       .select("id,dealer_id,author_username,created_at,category,text")
       .single();
-
     if (error) throw error;
 
-    // 2) Show it immediately
-    const row: any = data;
-    const inserted: Note = {
-      id: String(row.id),
-      dealerId: row.dealer_id,
-      authorUsername: row.author_username,
-      tsISO: new Date(row.created_at).toISOString(),
-      category: row.category as NoteCategory,
-      text: row.text,
+    const saved: Note = {
+      id: String(data.id),
+      dealerId: data.dealer_id,
+      authorUsername: data.author_username,
+      tsISO: new Date(data.created_at).toISOString(),
+      category: data.category as NoteCategory,
+      text: data.text,
+      pending: false,
     };
-    setNotes(prev => [inserted, ...prev]);
-    setNoteText("");
-
-    // 3) Manager-note behavior: also create a Task for the rep
-  // 3) Manager-note behavior: also create a Task for the rep
-if (noteCategory === "Manager" && canUseManagerNote) {
-  const repUser = dealer.assignedRepUsername || session!.username;
-  if (repUser) {
-    // Guard: dealer.id must be a real UUID or Postgres will reject it
-    const isUUID = /^[0-9a-fA-F-]{36}$/.test(dealer.id);
-    if (!isUUID) {
-      showToast("This dealer isn’t synced yet. Save the dealer first, then add a Manager Note to create a task.", "error");
-    } else {
-      // Optimistic UI with a temporary id; we’ll replace it with the DB UUID after insert
-      const tempId = `tmp_${Date.now()}`;
-      const t: Task = {
-        id: tempId,
-        dealerId: dealer.id,
-        repUsername: repUser,
-        text: dealer.name,
-        createdAtISO: new Date().toISOString(),
-      };
-
-      // Optimistic UI
-      setTasks((prev) => [t, ...prev]);
-
-      // Persist in Supabase — let Postgres generate the UUID (don’t send our own id)
-      const { data: tRow, error: taskErr } = await supabase
-        .from("dealer_tasks")
-        .insert({
-          dealer_id: t.dealerId,
-          rep_username: t.repUsername,
-          text: t.text,
-          created_at: t.createdAtISO,
-        })
-        .select("id,dealer_id,rep_username,text,created_at,completed_at")
-        .single();
-
-      if (taskErr) {
-        // Roll back optimistic add
-        setTasks((prev) => prev.filter((x) => x.id !== tempId));
-        showToast(taskErr.message || "Could not create task", "error");
-      } else if (tRow) {
-        // Replace the temp id with the real DB UUID so Complete works reliably
-        const realId = String((tRow as any).id);
-        setTasks((prev) =>
-          prev.map((x) => (x.id === tempId ? { ...x, id: realId } : x))
-        );
-        showToast("Task created for the rep.", "success");
-      }
-    }
-  }
-}
-
-    // 4) All good
+    setNotes(prev => prev.map(n => (n.id === tempId ? saved : n)));
     showToast("Note added.", "success");
+  };
+
+  try {
+    await saveOnce();
   } catch (e: any) {
-    showToast(e?.message || "Failed to add note.", "error");
+    // Mark temp as failed
+    setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
+
+    // Offer Retry / Undo
+    showActionToast({
+      kind: "error",
+      message: "Saving note failed.",
+      actionLabel: "Retry",
+      onAction: async () => {
+        setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: true, failed: false } : n)));
+        try { await saveOnce(); }
+        catch {
+          setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
+          showToast("Still failed. Try again later.", "error");
+        }
+      },
+      secondaryLabel: "Undo",
+      onSecondary: () => setNotes(prev => prev.filter(n => n.id !== tempId)),
+    });
   }
 };
 
@@ -4864,7 +4880,7 @@ const App: React.FC = () => {
   const { users, setUsers, dealers, setDealers, regions, setRegions, tasks, setTasks, notes, setNotes } = useData();
   const [route, setRoute] = useState<RouteKey>("login");
   const [session, setSession] = useState<Session>(null);
-  const { toasts, showToast, dismiss } = useToasts();
+  const { toasts, showToast, showActionToast, dismiss } = useToasts();
 
   // RESET INVITE: show modal if visiting /reset
   const [resetOpen, setResetOpen] = useState(false);
@@ -5461,6 +5477,7 @@ await syncLastVisitedFromNotes();
                 regions={regions}
                 setRoute={setRoute}
                 showToast={showToast}
+                showActionToast={showActionToast}
               />
             )}
 {route === "rep-route" && (
