@@ -6374,106 +6374,120 @@ const exportDailySummaryCSV = () => {
         </div>
       </div>
 
-      {/* Search & Filters */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Find your dealers</h2>
-          <span className="text-sm text-slate-500">
-  {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
-</span>
-        </div>
-
-        <div className="md:col-span-2 relative">
-  <input
-    value={q}
-    onChange={(e) => { setQ(e.target.value); setOpenSug(true); }}
-    onFocus={() => setOpenSug(true)}
-    onBlur={() => setTimeout(() => setOpenSug(false), 150)}
-    placeholder="Search dealers (name, city, region)…"
-    className="w-full border rounded-lg px-3 py-2"
-  />
-
-  {/* Mobile suggestions dropdown (mobile only) */}
-  {openSug && q.trim().length >= 2 && mobileSuggestions.length > 0 && (
-  <div className="md:hidden absolute z-20 left-0 right-0 mt-1 max-h-64 overflow-auto bg-white border rounded-lg shadow">
-    {mobileSuggestions.map((d) => (
-      <button
-        key={d.id}
-        className="w-full text-left px-3 py-2 hover:bg-slate-50"
-        onMouseDown={(e) => e.preventDefault()}  // keep input focused so click works
-        onClick={() => { addDealer(d); setOpenSug(false); }}
-      >
-        <div className="font-medium">{d.name}</div>
-        <div className="text-xs text-slate-500">
-          {[d.city, d.state].filter(Boolean).join(", ")}
-          {d.region ? ` · ${d.region}` : ""}
-        </div>
-        {d.lastVisited && (
-          <div className="text-[11px] text-slate-400">Last Visited: {d.lastVisited}</div>
-        )}
-      </button>
-    ))}
+    {/* Search & Filters */}
+<div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+  <div className="flex items-center justify-between mb-3">
+    <h2 className="text-lg font-semibold">Find your dealers</h2>
+    <span className="text-sm text-slate-500">
+      {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
+    </span>
   </div>
-)}
-</div>
-          <select className="border rounded-lg px-3 py-2" value={state} onChange={(e) => setState(e.target.value)}>
-            <option value="">All States</option>
-            {states.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
 
-          <select className="border rounded-lg px-3 py-2" value={region} onChange={(e) => setRegion(e.target.value)}>
-            <option value="">All Regions</option>
-            {regions.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
+  {/* Search input + filters (wrap nicely on mobile) */}
+  <div className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto]">
+    {/* search */}
+    <div className="relative md:col-span-1">
+      <input
+        value={q}
+        onChange={(e) => { setQ(e.target.value); setOpenSug(true); }}
+        onFocus={() => setOpenSug(true)}
+        onBlur={() => setTimeout(() => setOpenSug(false), 150)}
+        placeholder="Search dealers (name, city, region)…"
+        className="w-full border rounded-lg px-3 py-2"
+      />
 
-          <select className="border rounded-lg px-3 py-2" value={city} onChange={(e) => setCity(e.target.value)}>
-            <option value="">All Cities</option>
-            {cities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+      {/* Mobile suggestions dropdown (mobile only) */}
+      {openSug && q.trim().length >= 2 && mobileSuggestions.length > 0 && (
+        <div className="md:hidden absolute z-20 left-0 right-0 mt-1 max-h-64 overflow-auto bg-white border rounded-lg shadow">
+          {mobileSuggestions.map((d) => (
+            <button
+              key={d.id}
+              className="w-full text-left px-3 py-2 hover:bg-slate-50"
+              onMouseDown={(e) => e.preventDefault()}  // keep input from blurring
+              onClick={() => { addDealer(d); setOpenSug(false); }}
+            >
+              <div className="font-medium">{d.name}</div>
+              <div className="text-xs text-slate-500">
+                {[d.city, d.state].filter(Boolean).join(", ")}
+                {d.region ? ` · ${d.region}` : ""}
+              </div>
+              {d.lastVisited && (
+                <div className="text-[11px] text-slate-400">Last Visited: {d.lastVisited}</div>
+              )}
+            </button>
+          ))}
         </div>
+      )}
+    </div>
 
-        {filtered.length === 0 && (
-  <div className="p-6 text-center text-slate-500">
-    {q.trim().length < 2
-      ? "Start typing to search (min 2 letters)."
-      : "No results. Try different filters."}
+    {/* filters */}
+    <select
+      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      value={state}
+      onChange={(e) => setState(e.target.value)}
+    >
+      <option value="">All States</option>
+      {states.map((s) => (
+        <option key={s} value={s}>{s}</option>
+      ))}
+    </select>
+
+    <select
+      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      value={region}
+      onChange={(e) => setRegion(e.target.value)}
+    >
+      <option value="">All Regions</option>
+      {regions.map((r) => (
+        <option key={r} value={r}>{r}</option>
+      ))}
+    </select>
+
+    <select
+      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      value={city}
+      onChange={(e) => setCity(e.target.value)}
+    >
+      <option value="">All Cities</option>
+      {cities.map((c) => (
+        <option key={c} value={c}>{c}</option>
+      ))}
+    </select>
   </div>
-)}
-{/* Search Results */}
-<div className="space-y-2">
-  {filtered.map((d) => {
-          const inRoute = routeIds.has(d.id);
-          return (
-            <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
-              <div>
-                <div className="font-semibold">{d.name}</div>
-                <div className="text-sm text-slate-600">
-                  {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
-                </div>
-                <div className="text-xs text-slate-500">{d.region}</div>
-                <div className="text-xs text-slate-500">Last Visited: {d.lastVisited || "—"}</div>
-              </div>
-              <div className="flex gap-2">
-                <button className={`${actionBtn}`} disabled={inRoute} onClick={() => addDealer(d)}>
-                  {inRoute ? "Added" : "Add"}
-                </button>
-              </div>
+
+  {/* empty state */}
+  {filtered.length === 0 && (
+    <div className="p-6 text-center text-slate-500">
+      {q.trim().length < 2
+        ? "Start typing to search (min 2 letters)."
+        : "No results. Try different filters."}
+    </div>
+  )}
+
+  {/* Search Results */}
+  <div className="space-y-2">
+    {filtered.map((d) => {
+      const inRoute = routeIds.has(d.id);
+      return (
+        <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
+          <div>
+            <div className="font-semibold">{d.name}</div>
+            <div className="text-sm text-slate-600">
+              {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
             </div>
-          );
-        })}
-      </div>
+            <div className="text-xs text-slate-500">{d.region}</div>
+            <div className="text-xs text-slate-500">Last Visited: {d.lastVisited || "—"}</div>
+          </div>
+          <div className="flex gap-2">
+            <button className={actionBtn} disabled={inRoute} onClick={() => addDealer(d)}>
+              {inRoute ? "Added" : "Add"}
+            </button>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+</div>
 
       {/* Route List */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
