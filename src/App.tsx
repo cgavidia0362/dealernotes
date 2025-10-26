@@ -2672,11 +2672,70 @@ const ReportingView: React.FC<{
   }, [scopedDealers]);
 
   // Notes scoped by selected rep (authored)
-  const scopedNotes = useMemo(() => {
-    if (repFilter === "ALL") return notes;
-    if (!selectedRep) return [];
-    return notes.filter((n) => n.authorUsername === selectedRep.username);
-  }, [repFilter, selectedRep, notes]);
+  // --- Reporting data source: pull Visit notes from Supabase for the last 6 months ---
+const [reportNotes, setReportNotes] = useState<Note[]>([]);
+const [reportLoading, setReportLoading] = useState(false);
+const [reportError, setReportError] = useState<string | null>(null);
+
+useEffect(() => {
+  let isCancelled = false;
+
+  (async () => {
+    try {
+      setReportLoading(true);
+      setReportError(null);
+
+      // First day of current month minus 5 months → covers 6 calendar months
+      const now = new Date();
+      const since = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+      const sinceISO = since.toISOString();
+
+      // Base query: last 6 months of Visit notes (small projection only)
+      let q = supabase
+        .from("dealer_notes")
+        .select("id,dealer_id,author_username,created_at,category,text", { count: "exact" })
+        .eq("category", "Visit")
+        .gte("created_at", sinceISO);
+
+      // (Optional) if a specific rep is selected, filter server-side
+      if (repFilter !== "ALL" && selectedRep) {
+        q = q.eq("author_username", selectedRep.username);
+      }
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      if (!isCancelled) {
+        const mapped: Note[] =
+          (data || []).map((r: any) => ({
+            id: r.id,
+            dealerId: r.dealer_id,
+            authorUsername: r.author_username,
+            tsISO: r.created_at,
+            category: r.category,
+            text: r.text ?? ""
+          }));
+        setReportNotes(mapped);
+      }
+    } catch (e: any) {
+      if (!isCancelled) setReportError(e.message || String(e));
+    } finally {
+      if (!isCancelled) setReportLoading(false);
+    }
+  })();
+
+  return () => { isCancelled = true; };
+  // re-fetch if the selected rep changes (admins/managers)
+}, [repFilter, selectedRep]);
+
+ // Notes scoped by selected rep (authored)
+// Prefer freshly-fetched reportNotes; fall back to existing notes while loading.
+const scopedNotes = useMemo(() => {
+  const source = reportNotes.length ? reportNotes : notes;
+  if (repFilter === "ALL") return source;
+  if (!selectedRep) return [];
+  return source.filter((n) => n.authorUsername === selectedRep.username);
+}, [repFilter, selectedRep, reportNotes, notes]);
 
   // Visits last 30 days (authored)
   const visitsLast30 = useMemo(() => {
