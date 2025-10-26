@@ -2693,19 +2693,34 @@ const ReportingView: React.FC<{
     return { rows, max, total: recent.length };
   }, [scopedNotes, repFilter, selectedRep]);
 
-  // Month-to-month: last 6 months buckets from scopedNotes (Visit)
-  const months = monthsBack(6); // oldest -> newest
-  const monthlyVisits = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const m of months) map[m.key] = 0;
-    for (const n of scopedNotes) {
-      if (n.category !== "Visit") continue;
-      const d = new Date(n.tsISO);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      if (key in map) map[key]++;
-    }
-    return map; // key -> count
-  }, [scopedNotes]);
+ // Month-to-month: last 6m (keys must match the reducer below)
+const months = useMemo(() => {
+  // Oldest -> newest, first of each month
+  const arr: { date: Date; label: string; key: string }[] = [];
+  const base = new Date();
+  // normalize to the first of this month to avoid DST/clock drift issues
+  base.setDate(1);
+  base.setHours(0, 0, 0, 0);
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; // ← key shape we’ll use below
+    const label = d.toLocaleString("default", { month: "short" });
+    arr.push({ date: d, label, key });
+  }
+  return arr;
+}, []);
+
+// Reduce scoped visit notes into monthly counts keyed exactly like months[].key
+const monthlyVisits = useMemo(() => {
+  const map: Record<string, number> = {};
+  for (const n of scopedNotes) {
+    if (n.category !== "Visit") continue;
+    const d = new Date(n.tsISO);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    map[key] = (map[key] || 0) + 1;
+  }
+  return map; // key => count
+}, [scopedNotes]);
 
   const thisMonthKey = months[months.length - 1].key;
   const lastMonthKey = months[months.length - 2]?.key;
