@@ -61,6 +61,7 @@ type User = {
   regionsByState: Record<string, string[]>;
   phone?: string; // ← NEW
   status?: UserStatus; // ← NEW (login gating)
+  reportUrl?: string; // ← NEW (external report dashboard for Reps)
 };
 
 type Contact = { name: string; phone: string };
@@ -115,7 +116,7 @@ type Task = {
   completedAtISO?: string; // ← NEW (for “Complete Task”)
 };
 
-type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reset";
+type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset";
 
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
@@ -547,6 +548,13 @@ const TopBar: React.FC<{
     onClick={() => setRoute("rep-route")}
   />
 )}
+              {session?.role === "Rep" && (
+  <Tab
+    label="Reports"
+    active={route === "reports"}
+    onClick={() => setRoute("reports")}
+  />
+)}
               <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
               <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
             </nav>
@@ -589,6 +597,13 @@ const TopBar: React.FC<{
     label="Route"
     active={route === "rep-route"}
     onClick={() => setRoute("rep-route")}
+  />
+)}
+            {session?.role === "Rep" && (
+  <MobileTab
+    label="Reports"
+    active={route === "reports"}
+    onClick={() => setRoute("reports")}
   />
 )}
             <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
@@ -2613,6 +2628,101 @@ const daysAgo = (iso?: string) => {
   return diff;
 };
 
+/* ============================= Rep Reports View ================================
+   External report dashboard access for Reps
+================================================================================= */
+
+const RepReportsView: React.FC<{
+  session: User;
+}> = ({ session }) => {
+  const reportUrl = session.reportUrl;
+  const hasReport = reportUrl && reportUrl.trim().length > 0;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-lg shadow-lg p-4 sm:p-6 text-white">
+        <div className="flex items-center gap-3">
+          <svg className="w-6 h-6 sm:w-8 sm:h-8 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold">My Reports</h2>
+            <p className="text-blue-100 text-xs sm:text-sm">Access your performance dashboards and analytics</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Report Card or Empty State */}
+      {hasReport ? (
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="p-4 sm:p-6">
+            <div className="border-2 border-blue-100 rounded-lg p-4 sm:p-6 bg-gradient-to-br from-white to-blue-50 hover:shadow-lg transition-shadow">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                <div className="flex items-start gap-3 sm:gap-4 flex-1">
+                  <div className="bg-blue-100 p-2 sm:p-3 rounded-lg flex-shrink-0">
+                    <svg className="w-6 h-6 sm:w-8 sm:h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-lg sm:text-xl font-semibold text-slate-800 mb-2">📊 Performance Dashboard</h4>
+                    <p className="text-slate-600 text-sm mb-3 sm:mb-4">
+                      View your monthly metrics, territory performance, and dealer activity analytics.
+                    </p>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Updated daily</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-col items-stretch sm:items-end gap-2">
+                  <a 
+                    href={reportUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-md hover:shadow-lg text-sm sm:text-base"
+                  >
+                    Open Report
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                  <p className="text-xs text-slate-500 text-center sm:text-right">Opens in new tab</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="p-4 sm:p-6">
+            <div className="border-2 border-dashed border-slate-200 rounded-lg p-6 sm:p-8 bg-slate-50 text-center">
+              <svg className="w-12 h-12 sm:w-16 sm:h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h4 className="text-base sm:text-lg font-semibold text-slate-700 mb-2">No Report Available</h4>
+              <p className="text-slate-500 text-sm max-w-md mx-auto px-4">
+                Your performance dashboard hasn't been assigned yet. Please contact your manager or admin to set up your report access.
+              </p>
+              <div className="mt-6">
+                <button 
+                  className="px-4 py-2 bg-slate-200 text-slate-600 rounded-lg text-sm font-medium cursor-not-allowed" 
+                  disabled
+                >
+                  Report Not Configured
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ============================= PART 3 / 4 ================================
    Reporting view (unchanged logic, kept intact per your request)
 =========================================================================== */
@@ -3525,7 +3635,7 @@ useEffect(() => {
   // ---------- Users table + modal ----------
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "" };
+  const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "", reportUrl: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Import preview state
@@ -3667,7 +3777,8 @@ const saveUser = async () => {
           email: emailForProfile || null,
           role: draft.role,
           status: chosenStatus,
-          name: draft.name,            // <-- add this line
+          name: draft.name,
+          report_url: draft.reportUrl || null,
         })
         .eq("id", editingId);        
         if (error) throw error;
@@ -3680,7 +3791,8 @@ const { data, error, status } = await supabase
   email: emailForProfile || null,
   role: draft.role,
   status: chosenStatus,
-  name: draft.name,            // <-- add this line
+  name: draft.name,
+  report_url: draft.reportUrl || null,
 })
 .eq("email", emailForProfile)
 .select("id")
@@ -4825,6 +4937,78 @@ const confirmImportDealers = async () => {
     </div>
   );
 })()}
+
+          {/* Report Dashboard Configuration — ONLY for Reps when editing */}
+          {editingId && draft.role === "Rep" && (
+            <div className="mt-6 border-t pt-6">
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <h4 className="font-semibold text-slate-800">Report Dashboard Configuration</h4>
+              </div>
+              <p className="text-sm text-slate-600 mb-4">
+                Configure external reporting dashboard access for this rep. The URL will be displayed on their Reports tab.
+              </p>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Report Dashboard URL
+                  <span className="text-slate-500 font-normal ml-1">(Reps only)</span>
+                </label>
+                
+                <div className="flex flex-col sm:flex-row gap-2 mb-3">
+                  <input 
+                    type="url" 
+                    placeholder="https://powerbi.com/dashboards/rep-example" 
+                    value={draft.reportUrl || ""}
+                    onChange={(e) => setDraft((d) => ({ ...d, reportUrl: e.target.value }))}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (draft.reportUrl && draft.reportUrl.trim()) {
+                        window.open(draft.reportUrl, '_blank');
+                      } else {
+                        alert('Please enter a URL first');
+                      }
+                    }}
+                    className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    Test Link
+                  </button>
+                </div>
+
+                <div className="flex items-start gap-2 text-xs text-slate-600 bg-white rounded p-3 border">
+                  <svg className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div>
+                    <strong>Note:</strong> This URL will appear on the rep's Reports tab. Make sure it's the correct dashboard link for this user. The link will open in a new browser tab.
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 mt-4">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (confirm('Are you sure you want to clear this report URL? The rep will no longer have access to their dashboard.')) {
+                        setDraft((d) => ({ ...d, reportUrl: "" }));
+                      }
+                    }}
+                    className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium"
+                  >
+                    Clear URL
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Invite link row — ONLY visible when editing an existing user */}
           {editingId && (
             <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-end">
@@ -5182,8 +5366,8 @@ useEffect(() => {
       // 1) Load basic user profiles
       const { data: profiles, error: pErr } = await supabase
         .from('profiles')
-        .select('id, username, email, role, status, name, phone')         // ← no name, no phone
-.order('username', { ascending: true });              // ← sort by username, not name
+        .select('id, username, email, role, status, name, phone, report_url')
+.order('username', { ascending: true });
 
       if (pErr) throw pErr;
       const idToUsername = new Map<string, string>();
@@ -5252,6 +5436,7 @@ useEffect(() => {
           regionsByState: rbs,
           phone: p.phone || undefined,
           status: (p.status || 'Active') as UserStatus,
+          reportUrl: p.report_url || undefined,
         } as User;
       });
 
@@ -5564,6 +5749,10 @@ await syncLastVisitedFromNotes();
     showToast={showToast}
   />
 )}
+{route === "reports" && session && (() => {
+  const currentUser = users.find(u => u.username === session.username);
+  return currentUser ? <RepReportsView session={currentUser} /> : null;
+})()}
             {route === "reporting" && <ReportingView dealers={dealers} users={users} notes={notes} />}
             
             {route === "user-management" && (
@@ -6682,4 +6871,3 @@ const exportDailySummaryCSV = () => {
   );
 };
 export default App;
-
