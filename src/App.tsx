@@ -554,8 +554,12 @@ const TopBar: React.FC<{
     onClick={() => setRoute("reports")}
   />
 )}
-              <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
-              <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
+              {(session?.role === "Admin" || session?.role === "Manager") && (
+  <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
+)}
+             {session?.role === "Admin" && (
+  <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+)}
             </nav>
           )}
         </div>
@@ -605,8 +609,12 @@ const TopBar: React.FC<{
     onClick={() => setRoute("reports")}
   />
 )}
-            <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
-            <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
+           {(session?.role === "Admin" || session?.role === "Manager") && (
+  <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
+)}
+           {session?.role === "Admin" && (
+  <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+)}
             <button className="ml-auto px-3 py-2 text-sm text-blue-600" onClick={onLogout}>
               Log Off
             </button>
