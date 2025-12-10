@@ -117,7 +117,6 @@ type Task = {
 };
 
 type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset";
-
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
 const LS_DEALERS = "demo_dealers";
@@ -555,12 +554,8 @@ const TopBar: React.FC<{
     onClick={() => setRoute("reports")}
   />
 )}
-             {(session?.role === "Admin" || session?.role === "Manager") && (
-  <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
-)}
-             {session?.role === "Admin" && (
-  <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} />
-)}
+              <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
+              <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
             </nav>
           )}
         </div>
@@ -610,12 +605,8 @@ const TopBar: React.FC<{
     onClick={() => setRoute("reports")}
   />
 )}
-           {(session?.role === "Admin" || session?.role === "Manager") && (
-  <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
-)}
- {session?.role === "Admin" && (
-  <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
-)}
+            <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} disabled={!can.reporting} />
+            <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} disabled={!can.userMgmt} />
             <button className="ml-auto px-3 py-2 text-sm text-blue-600" onClick={onLogout}>
               Log Off
             </button>
@@ -5757,7 +5748,7 @@ await syncLastVisitedFromNotes();
     showToast={showToast}
   />
 )}
-{route === "reports" && session && (() => {
+          {route === "reports" && session && (() => {
   const currentUser = users.find(u => u.username === session.username);
   return currentUser ? <RepReportsView session={currentUser} /> : null;
 })()}
@@ -6261,10 +6252,30 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
   // types
   type RouteStop = { dealerId: string; position: number };
   type RouteByDate = Record<string, RouteStop[]>;
+  
+  type RoutePreset = {
+    id: string;
+    rep_username: string;
+    name: string;
+    dealer_ids: string[];
+    created_at: string;
+    updated_at: string;
+    last_used_at: string | null;
+  };
 
   // state
   const [dateStr, setDateStr] = useState<string>(todayISO());
   const [routeByDate, setRouteByDate] = useState<RouteByDate>({});
+  
+  // Preset state
+  const [presets, setPresets] = useState<RoutePreset[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [loadModalOpen, setLoadModalOpen] = useState(false);
+  const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<RoutePreset | null>(null);
+  const [presetName, setPresetName] = useState("");
+  const [selectedPresetId, setSelectedPresetId] = useState("");
 
   // load today’s route from Supabase
   useEffect(() => {
@@ -6296,6 +6307,44 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
       isCancelled = true;
     };
   }, [dateStr, me?.id]);
+
+  // Load presets from Supabase
+  useEffect(() => {
+    if (!me?.username) return;
+    let isCancelled = false;
+
+    (async () => {
+      setPresetsLoading(true);
+      const { data, error } = await supabase
+        .from("route_presets")
+        .select("*")
+        .eq("rep_username", me.username)
+        .order("updated_at", { ascending: false });
+
+      if (error) {
+        console.error("load presets error:", error);
+        setPresetsLoading(false);
+        return;
+      }
+      if (isCancelled) return;
+
+      const mapped: RoutePreset[] = (data || []).map((r: any) => ({
+        id: r.id,
+        rep_username: r.rep_username,
+        name: r.name,
+        dealer_ids: r.dealer_ids || [],
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        last_used_at: r.last_used_at,
+      }));
+      setPresets(mapped);
+      setPresetsLoading(false);
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [me?.username]);
 
   // which dealers can this rep see?
   const accessibleDealers = useMemo(() => {
@@ -6463,6 +6512,184 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     }
   };
 
+  // === PRESET FUNCTIONS ===
+  
+  // Save current route as a new preset
+  const savePreset = async () => {
+    if (!presetName.trim()) {
+      showToast("Please enter a preset name", "error");
+      return;
+    }
+    
+    const currentRoute = routeByDate[dateStr] || [];
+    if (currentRoute.length === 0) {
+      showToast("Add some dealers to your route first", "error");
+      return;
+    }
+
+    const dealerIds = currentRoute
+      .sort((a, b) => a.position - b.position)
+      .map(r => r.dealerId);
+
+    const { data, error } = await supabase
+      .from("route_presets")
+      .insert({
+        rep_username: me!.username,
+        name: presetName.trim(),
+        dealer_ids: dealerIds,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("save preset error:", error);
+      showToast(error.message.includes("unique") ? "A preset with that name already exists" : "Failed to save preset", "error");
+      return;
+    }
+
+    const newPreset: RoutePreset = {
+      id: data.id,
+      rep_username: data.rep_username,
+      name: data.name,
+      dealer_ids: data.dealer_ids,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+      last_used_at: data.last_used_at,
+    };
+
+    setPresets(prev => [newPreset, ...prev]);
+    showToast(`Preset "${presetName}" saved!`, "success");
+    setSaveModalOpen(false);
+    setPresetName("");
+  };
+
+  // Load a preset into current route (adds to end)
+  const loadPresetIntoRoute = async (presetId: string) => {
+    const preset = presets.find(p => p.id === presetId);
+    if (!preset) return;
+
+    // Add dealers to end of current route
+    const currentRoute = routeByDate[dateStr] || [];
+    const maxPosition = currentRoute.length > 0 
+      ? Math.max(...currentRoute.map(r => r.position))
+      : 0;
+
+    const newStops: RouteStop[] = preset.dealer_ids.map((dealerId, index) => ({
+      dealerId,
+      position: maxPosition + index + 1,
+    }));
+
+    // Update local state
+    setRouteByDate(prev => ({
+      ...prev,
+      [dateStr]: [...currentRoute, ...newStops],
+    }));
+
+    // Save to Supabase
+    const inserts = newStops.map(stop => ({
+      user_id: me!.id,
+      date: dateStr,
+      dealer_id: stop.dealerId,
+      position: stop.position,
+    }));
+
+    const { error } = await supabase
+      .from("dealer_routes")
+      .upsert(inserts, { onConflict: "user_id,date,dealer_id" });
+
+    if (error) {
+      console.error("load preset error:", error);
+      showToast("Failed to load preset", "error");
+      return;
+    }
+
+    // Update last_used_at
+    await supabase
+      .from("route_presets")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("id", presetId);
+
+    showToast(`Preset "${preset.name}" loaded! ${newStops.length} dealers added.`, "success");
+    setLoadModalOpen(false);
+    setSelectedPresetId("");
+  };
+
+  // Update an existing preset
+  const updatePreset = async (presetId: string, updates: { name?: string; dealer_ids?: string[] }) => {
+    const { error } = await supabase
+      .from("route_presets")
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq("id", presetId);
+
+    if (error) {
+      console.error("update preset error:", error);
+      showToast("Failed to update preset", "error");
+      return;
+    }
+
+    setPresets(prev => prev.map(p => p.id === presetId ? { ...p, ...updates, updated_at: new Date().toISOString() } : p));
+    showToast("Preset updated!", "success");
+  };
+
+  // Delete a preset
+  const deletePreset = async (presetId: string) => {
+    const preset = presets.find(p => p.id === presetId);
+    if (!preset) return;
+
+    if (!confirm(`Delete preset "${preset.name}"?`)) return;
+
+    const { error } = await supabase
+      .from("route_presets")
+      .delete()
+      .eq("id", presetId);
+
+    if (error) {
+      console.error("delete preset error:", error);
+      showToast("Failed to delete preset", "error");
+      return;
+    }
+
+    setPresets(prev => prev.filter(p => p.id !== presetId));
+    showToast(`Preset "${preset.name}" deleted`, "success");
+  };
+
+  // Duplicate a preset
+  const duplicatePreset = async (presetId: string) => {
+    const preset = presets.find(p => p.id === presetId);
+    if (!preset) return;
+
+    const newName = `${preset.name} (Copy)`;
+
+    const { data, error } = await supabase
+      .from("route_presets")
+      .insert({
+        rep_username: me!.username,
+        name: newName,
+        dealer_ids: preset.dealer_ids,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("duplicate preset error:", error);
+      showToast("Failed to duplicate preset", "error");
+      return;
+    }
+
+    const newPreset: RoutePreset = {
+      id: data.id,
+      rep_username: data.rep_username,
+      name: data.name,
+      dealer_ids: data.dealer_ids,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+      last_used_at: data.last_used_at,
+    };
+
+    setPresets(prev => [newPreset, ...prev]);
+    showToast(`Preset duplicated as "${newName}"`, "success");
+  };
+
   // export + copy helpers (addresses only)
   const exportCSV = () => {
     const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
@@ -6625,7 +6852,7 @@ const exportDailySummaryCSV = () => {
 </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             type="date"
             value={dateStr}
@@ -6633,6 +6860,44 @@ const exportDailySummaryCSV = () => {
             className="border rounded-lg px-3 py-2"
             title="Pick a day"
           />
+          {/* NEW: Preset Buttons */}
+          <button 
+            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium"
+            onClick={() => {
+              setSaveModalOpen(true);
+              setPresetName("");
+            }}
+            title="Save current route as preset"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+            </svg>
+            <span className="hidden sm:inline">Save Preset</span>
+          </button>
+          <button 
+            className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2 text-sm font-medium"
+            onClick={() => {
+              setLoadModalOpen(true);
+              setSelectedPresetId("");
+            }}
+            title="Load a saved preset"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            <span className="hidden sm:inline">Load Preset</span>
+          </button>
+          <button 
+            className="px-3 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium"
+            onClick={() => setManageModalOpen(true)}
+            title="Manage presets"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span className="hidden sm:inline">Manage</span>
+          </button>
           <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>
             Clear Day
           </button>
@@ -6874,6 +7139,363 @@ const exportDailySummaryCSV = () => {
       </div>
     </div> {/* end modal inner container */}
     </Modal>
+      )}
+
+      {/* === PRESET MODALS === */}
+      
+      {/* Save Preset Modal */}
+      {saveModalOpen && (
+        <Modal title="Save Route as Preset" onClose={() => {
+          setSaveModalOpen(false);
+          setPresetName("");
+        }}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Preset Name</label>
+              <input
+                type="text"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                placeholder="e.g., Monday North Loop"
+                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                onKeyPress={(e) => e.key === "Enter" && savePreset()}
+              />
+            </div>
+            <div className="bg-slate-50 border rounded-lg p-3">
+              <div className="text-sm text-slate-700 mb-2">This preset will include:</div>
+              <ul className="text-sm text-slate-600 space-y-1">
+                <li>• {sortedRoute.length} dealers in current order</li>
+                {sortedRoute.slice(0, 3).map((r, idx) => {
+                  const d = dealers.find(x => x.id === r.dealerId);
+                  return <li key={r.dealerId}>• {d?.name || "Unknown"}</li>;
+                })}
+                {sortedRoute.length > 3 && <li>• ... and {sortedRoute.length - 3} more</li>}
+              </ul>
+            </div>
+          </div>
+          <div className="mt-6 flex gap-3 justify-end">
+            <button
+              onClick={() => {
+                setSaveModalOpen(false);
+                setPresetName("");
+              }}
+              className="px-4 py-2 border rounded-lg text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={savePreset}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            >
+              Save Preset
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Load Preset Modal */}
+      {loadModalOpen && (
+        <Modal title="Load Route Preset" onClose={() => {
+          setLoadModalOpen(false);
+          setSelectedPresetId("");
+        }}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Choose a Preset</label>
+              <select
+                value={selectedPresetId}
+                onChange={(e) => setSelectedPresetId(e.target.value)}
+                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select a preset...</option>
+                {presets.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.dealer_ids.length} dealers)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedPresetId && (() => {
+              const preset = presets.find(p => p.id === selectedPresetId);
+              if (!preset) return null;
+              
+              return (
+                <div>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-start gap-3 mb-3">
+                      <svg className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div className="flex-1">
+                        <div className="font-medium text-slate-800 mb-1">Preview: {preset.name}</div>
+                        <div className="text-sm text-slate-600 mb-3">
+                          These {preset.dealer_ids.length} dealers will be added to the end of your current route:
+                        </div>
+                        <ol className="text-sm text-slate-700 space-y-1 list-decimal list-inside">
+                          {preset.dealer_ids.slice(0, 5).map(dealerId => {
+                            const d = dealers.find(x => x.id === dealerId);
+                            return <li key={dealerId}>{d?.name || "Unknown Dealer"}</li>;
+                          })}
+                          {preset.dealer_ids.length > 5 && (
+                            <li>... and {preset.dealer_ids.length - 5} more</li>
+                          )}
+                        </ol>
+                      </div>
+                    </div>
+                  </div>
+
+                  {sortedRoute.length > 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-3">
+                      <div className="flex items-start gap-3">
+                        <svg className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <div className="flex-1 text-sm">
+                          <div className="font-medium text-slate-800 mb-1">
+                            You currently have {sortedRoute.length} dealer{sortedRoute.length !== 1 ? 's' : ''} in your route
+                          </div>
+                          <div className="text-slate-600">
+                            Loading this preset will add {preset.dealer_ids.length} more, giving you a total of {sortedRoute.length + preset.dealer_ids.length} dealers.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+          <div className="mt-6 flex gap-3 justify-end">
+            <button
+              onClick={() => {
+                setLoadModalOpen(false);
+                setSelectedPresetId("");
+              }}
+              className="px-4 py-2 border rounded-lg text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => loadPresetIntoRoute(selectedPresetId)}
+              disabled={!selectedPresetId}
+              className={`px-4 py-2 rounded-lg font-medium ${
+                selectedPresetId
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-slate-200 text-slate-400 cursor-not-allowed"
+              }`}
+            >
+              Load Preset
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Manage Presets Modal */}
+      {manageModalOpen && (
+        <Modal 
+          title={`Manage Route Presets${editingPreset ? ` - Editing: ${editingPreset.name}` : ""}`}
+          onClose={() => {
+            setManageModalOpen(false);
+            setEditingPreset(null);
+          }}
+        >
+          {!editingPreset ? (
+            /* List View */
+            <div className="space-y-4">
+              <div className="text-sm text-slate-600">
+                View, edit, duplicate, or delete your saved route presets
+              </div>
+
+              {presetsLoading ? (
+                <div className="text-center py-8 text-slate-500">Loading presets...</div>
+              ) : presets.length === 0 ? (
+                <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                  <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <h4 className="text-lg font-semibold text-slate-700 mb-2">No Presets Yet</h4>
+                  <p className="text-slate-500 text-sm">Build a route and click "Save Preset" to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {presets.map(preset => (
+                    <div key={preset.id} className="border rounded-lg p-4 hover:bg-slate-50">
+                      <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <h4 className="font-semibold text-slate-800">{preset.name}</h4>
+                            <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
+                              {preset.dealer_ids.length} dealers
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-500 mt-1">
+                            Created: {new Date(preset.created_at).toLocaleDateString()}
+                            {preset.last_used_at && ` • Last used: ${new Date(preset.last_used_at).toLocaleDateString()}`}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-2">
+                            {preset.dealer_ids.slice(0, 3).map(dealerId => {
+                              const d = dealers.find(x => x.id === dealerId);
+                              return d?.name;
+                            }).filter(Boolean).join(" → ")}
+                            {preset.dealer_ids.length > 3 && ` → ... (+${preset.dealer_ids.length - 3} more)`}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => setEditingPreset(preset)}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                            title="Edit"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => duplicatePreset(preset.id)}
+                            className="p-2 text-green-600 hover:bg-green-50 rounded"
+                            title="Duplicate"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => {
+                              loadPresetIntoRoute(preset.id);
+                              setManageModalOpen(false);
+                            }}
+                            className="px-3 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700"
+                          >
+                            Load
+                          </button>
+                          <button
+                            onClick={() => deletePreset(preset.id)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded"
+                            title="Delete"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Edit View */
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Preset Name</label>
+                <input
+                  type="text"
+                  value={editingPreset.name}
+                  onChange={(e) => setEditingPreset({ ...editingPreset, name: e.target.value })}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <label className="block text-sm font-medium text-slate-700">
+                    Dealers in this Preset ({editingPreset.dealer_ids.length})
+                  </label>
+                </div>
+
+                <div className="space-y-2 max-h-80 overflow-y-auto border rounded-lg p-3">
+                  {editingPreset.dealer_ids.map((dealerId, index) => {
+                    const d = dealers.find(x => x.id === dealerId);
+                    return (
+                      <div key={dealerId} className="flex items-center gap-3 p-3 border rounded hover:bg-slate-50">
+                        <div className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center font-semibold text-sm">
+                          {index + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-slate-800 text-sm">{d?.name || "Unknown"}</div>
+                          <div className="text-xs text-slate-500">{d?.city}, {d?.state}</div>
+                        </div>
+                        <div className="flex gap-1">
+                          {index > 0 && (
+                            <button
+                              onClick={() => {
+                                const ids = [...editingPreset.dealer_ids];
+                                [ids[index], ids[index - 1]] = [ids[index - 1], ids[index]];
+                                setEditingPreset({ ...editingPreset, dealer_ids: ids });
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                              title="Move up"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+                              </svg>
+                            </button>
+                          )}
+                          {index < editingPreset.dealer_ids.length - 1 && (
+                            <button
+                              onClick={() => {
+                                const ids = [...editingPreset.dealer_ids];
+                                [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
+                                setEditingPreset({ ...editingPreset, dealer_ids: ids });
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                              title="Move down"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (editingPreset.dealer_ids.length === 1) {
+                                showToast("Preset must have at least 1 dealer", "error");
+                                return;
+                              }
+                              setEditingPreset({
+                                ...editingPreset,
+                                dealer_ids: editingPreset.dealer_ids.filter(id => id !== dealerId)
+                              });
+                            }}
+                            className="p-1 text-red-400 hover:text-red-600"
+                            title="Remove"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-4 border-t">
+                <button
+                  onClick={() => setEditingPreset(null)}
+                  className="px-4 py-2 border rounded-lg text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    updatePreset(editingPreset.id, {
+                      name: editingPreset.name,
+                      dealer_ids: editingPreset.dealer_ids
+                    });
+                    setEditingPreset(null);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );
