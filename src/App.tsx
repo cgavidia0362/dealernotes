@@ -1979,6 +1979,7 @@ const reasons /*: Dealer["noDealReasons"] | undefined*/ =
 
   const [noteCategory, setNoteCategory] = useState<NoteCategory>("Visit");
   const [noteText, setNoteText] = useState("");
+  const [isSavingNote, setIsSavingNote] = useState(false);
 
   const canUseManagerNote = isAdminManager;
 // Load notes for this dealer from Supabase whenever the dealer changes
@@ -2014,15 +2015,17 @@ useEffect(() => {
 }, [dealer.id]);
 const addNote = async () => {
   if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
+  if (isSavingNote) return;
+  
   const text = (noteText || "").trim();
   if (!text) return showToast("Please enter a note.", "error");
 
-  // Get logged-in user (for RLS user_id = auth.uid)
   const { data: authData, error: authErr } = await supabase.auth.getUser();
   if (authErr || !authData?.user) return showToast("You're not signed in.", "error");
   const authUserId = authData.user.id;
 
-  // Create a temp optimistic note
+  setIsSavingNote(true);
+
   const tempId = `temp_${Date.now()}`;
   const optimistic: Note = {
     id: tempId,
@@ -2034,11 +2037,9 @@ const addNote = async () => {
     pending: true,
   };
 
-  // 1️⃣  Show immediately
   setNotes(prev => [optimistic, ...prev]);
   setNoteText("");
 
-  // Helper that actually saves
   const saveOnce = async () => {
     const payload = {
       dealer_id: dealer.id,
@@ -2049,11 +2050,18 @@ const addNote = async () => {
       created_at: optimistic.tsISO,
     };
 
-    const { data, error } = await supabase
-      .from("dealer_notes")
-      .insert([payload])
-      .select("id,dealer_id,author_username,created_at,category,text")
-      .single();
+    const saveWithTimeout = Promise.race([
+      supabase
+        .from("dealer_notes")
+        .insert([payload])
+        .select("id,dealer_id,author_username,created_at,category,text")
+        .single(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 10000)
+      ),
+    ]);
+
+    const { data, error } = (await saveWithTimeout) as any;
     if (error) throw error;
 
     const saved: Note = {
@@ -2066,31 +2074,42 @@ const addNote = async () => {
       pending: false,
     };
     setNotes(prev => prev.map(n => (n.id === tempId ? saved : n)));
-    showToast("Note added.", "success");
+    showToast("Note saved successfully!", "success");
   };
 
   try {
     await saveOnce();
   } catch (e: any) {
-    // Mark temp as failed
     setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
 
-    // Offer Retry / Undo
+    const errorMsg = e.message?.includes("timeout")
+      ? "Save timed out - check your connection and retry"
+      : "Failed to save note - please retry";
+
     showActionToast({
       kind: "error",
-      message: "Saving note failed.",
+      message: errorMsg,
       actionLabel: "Retry",
       onAction: async () => {
+        setIsSavingNote(true);
         setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: true, failed: false } : n)));
-        try { await saveOnce(); }
-        catch {
+        try {
+          await saveOnce();
+        } catch {
           setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
-          showToast("Still failed. Try again later.", "error");
+          showToast("Still failed. Check your internet connection.", "error");
+        } finally {
+          setIsSavingNote(false);
         }
       },
       secondaryLabel: "Undo",
-      onSecondary: () => setNotes(prev => prev.filter(n => n.id !== tempId)),
+      onSecondary: () => {
+        setNotes(prev => prev.filter(n => n.id !== tempId));
+        setIsSavingNote(false);
+      },
     });
+  } finally {
+    setIsSavingNote(false);
   }
 };
 
@@ -2450,8 +2469,22 @@ const doDeleteDealer = async () => {
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-        <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={addNote} disabled={!repCanAccess}>
-            Add Note
+          <button 
+            className={`${brand.primary} text-white px-4 py-2 rounded-lg flex items-center justify-center gap-2 ${isSavingNote ? 'opacity-50 cursor-not-allowed' : ''}`} 
+            onClick={addNote} 
+            disabled={!repCanAccess || isSavingNote}
+          >
+            {isSavingNote ? (
+              <>
+                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving...
+              </>
+            ) : (
+              'Add Note'
+            )}
           </button>
         </div>
       </div>
