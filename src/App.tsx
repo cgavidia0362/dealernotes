@@ -2026,7 +2026,7 @@ const addNote = async () => {
 
   setIsSavingNote(true);
 
-  const tempId = `temp_${Date.now()}`;
+  const tempId = `${session?.username || "unknown"}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const optimistic: Note = {
     id: tempId,
     dealerId: dealer.id,
@@ -2048,12 +2048,13 @@ const addNote = async () => {
       category: noteCategory,
       text,
       created_at: optimistic.tsISO,
+      client_id: tempId,
     };
 
     const saveWithTimeout = Promise.race([
       supabase
         .from("dealer_notes")
-        .insert([payload])
+        .upsert([payload], { onConflict: "client_id" })
         .select("id,dealer_id,author_username,created_at,category,text")
         .single(),
       new Promise((_, reject) =>
