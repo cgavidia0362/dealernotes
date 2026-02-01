@@ -2051,19 +2051,31 @@ const addNote = async () => {
       client_id: tempId,
     };
 
-    const saveWithTimeout = Promise.race([
-      supabase
+    const doSave = async () => {
+      // Step 1: upsert the note
+      const { error: upsertErr } = await supabase
         .from("dealer_notes")
-        .upsert(payload, { onConflict: "client_id" })
+        .upsert(payload, { onConflict: "client_id" });
+      if (upsertErr) throw upsertErr;
+
+      // Step 2: fetch it back using client_id to get the real id
+      const { data, error: fetchErr } = await supabase
+        .from("dealer_notes")
         .select("id,dealer_id,author_username,created_at,category,text")
-        .single(),
+        .eq("client_id", tempId)
+        .single();
+      if (fetchErr) throw fetchErr;
+      return data;
+    };
+
+    const saveWithTimeout = Promise.race([
+      doSave(),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("timeout")), 10000)
       ),
     ]);
 
-    const { data, error } = (await saveWithTimeout) as any;
-    if (error) throw error;
+    const data = (await saveWithTimeout) as any;
 
     const saved: Note = {
       id: String(data.id),
