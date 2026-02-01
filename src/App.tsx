@@ -2054,7 +2054,7 @@ const addNote = async () => {
     const saveWithTimeout = Promise.race([
       supabase
         .from("dealer_notes")
-        .upsert([payload], { onConflict: "client_id" })
+        .upsert(payload, { onConflict: "client_id" })
         .select("id,dealer_id,author_username,created_at,category,text")
         .single(),
       new Promise((_, reject) =>
