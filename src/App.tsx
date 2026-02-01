@@ -2093,6 +2093,7 @@ const addNote = async () => {
   try {
     await saveOnce();
   } catch (e: any) {
+    console.log("NOTE SAVE ERROR:", JSON.stringify(e));
     setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
 
     const errorMsg = e.message?.includes("timeout")
