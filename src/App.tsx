@@ -913,12 +913,26 @@ const exportHomeDailySummaryCSV = () => {
 
   // Derived filtered list (NOTE: override-only filter removed)
   const filtered = useMemo(() => {
+    // Helper: Check if Rep covers this dealer (either explicit assignment OR territory)
+    const repCoversDealer = (d: Dealer): boolean => {
+      if (!isRep || !session) return true; // Managers/Admins see everything
+      
+      // Option 1: Explicit assignment (override)
+      if (d.assignedRepUsername === session.username) return true;
+      
+      // Option 2: Territory coverage
+      const me = users.find(u => u.username === session.username);
+      if (me && me.states.includes(d.state) && (me.regionsByState[d.state]?.includes(d.region) ?? false)) {
+        return true;
+      }
+      
+      return false;
+    };
+    
     return dealers
       .filter((d) => {
-        // CHANGE 1: Reps only see dealers assigned to them
-        if (isRep && d.assignedRepUsername !== session?.username) {
-          return false;
-        }
+        // CHANGE 1: Reps only see dealers they cover (assignment OR territory)
+        if (!repCoversDealer(d)) return false;
         
         if (q) {
           const s = q.toLowerCase();
@@ -948,11 +962,19 @@ const exportHomeDailySummaryCSV = () => {
 const recentTop10 = useMemo(() => {
   return [...dealers]
     .filter((d) => {
-      // CHANGE 1: Reps only see dealers assigned to them
-      if (isRep && d.assignedRepUsername !== session?.username) {
-        return false;
+      // CHANGE 1: Reps only see dealers they cover (assignment OR territory)
+      if (!isRep || !session) return true; // Managers/Admins see everything
+      
+      // Option 1: Explicit assignment (override)
+      if (d.assignedRepUsername === session.username) return true;
+      
+      // Option 2: Territory coverage
+      const me = users.find(u => u.username === session.username);
+      if (me && me.states.includes(d.state) && (me.regionsByState[d.state]?.includes(d.region) ?? false)) {
+        return true;
       }
-      return true;
+      
+      return false;
     })
     .sort((a, b) => {
       // CHANGE 2: Dealers with no lastVisited (new dealers) float to top
@@ -962,7 +984,7 @@ const recentTop10 = useMemo(() => {
       return a.name.localeCompare(b.name); // tie-breaker
     })
     .slice(0, 10);
-}, [dealers, isRep, session]);
+}, [dealers, isRep, session, users]);
 
 // Pagination for search results
 const totalPages = isSearching ? Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)) : 1;
