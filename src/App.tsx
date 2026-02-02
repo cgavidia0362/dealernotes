@@ -125,6 +125,7 @@ const LS_TASKS = "demo_tasks";
 const LS_NOTES = "demo_notes";
 const LS_LAST_SELECTED_DEALER = "demo_last_selected_dealer";
 const LS_REP_ROUTE = "demo_rep_route"; // per-user routes (local preview)
+const LS_DEALER_FILTERS = "demo_dealer_filters"; // persist search filters
 // NEW: simple auth-related storage (demo-level)
 const LS_INVITES = "demo_invites";     // token -> { userId, createdAtISO }
 const LS_PASSWORDS = "demo_passwords"; // username -> password (demo only)
@@ -724,12 +725,20 @@ const DealerSearchView: React.FC<{
   onClickTask,
   notes,
 }) => {
-  const [q, setQ] = useState("");
-  const [fRep, setFRep] = useState<string>("");
-  const [fState, setFState] = useState<string>("");
-  const [fRegion, setFRegion] = useState<string>("");
-  const [fType, setFType] = useState<string>("");
-  const [fStatus, setFStatus] = useState<string>("");
+  // Load persisted filters from localStorage
+  const savedFilters = loadLS<{q?: string; fRep?: string; fState?: string; fRegion?: string; fType?: string; fStatus?: string}>(LS_DEALER_FILTERS, {});
+  
+  const [q, setQ] = useState(savedFilters.q || "");
+  const [fRep, setFRep] = useState<string>(savedFilters.fRep || "");
+  const [fState, setFState] = useState<string>(savedFilters.fState || "");
+  const [fRegion, setFRegion] = useState<string>(savedFilters.fRegion || "");
+  const [fType, setFType] = useState<string>(savedFilters.fType || "");
+  const [fStatus, setFStatus] = useState<string>(savedFilters.fStatus || "");
+
+  // Save filters to localStorage whenever they change
+  useEffect(() => {
+    saveLS(LS_DEALER_FILTERS, { q, fRep, fState, fRegion, fType, fStatus });
+  }, [q, fRep, fState, fRegion, fType, fStatus]);
 
   // --- paging + searching flags ---
   const PAGE_SIZE = 10;
@@ -906,6 +915,11 @@ const exportHomeDailySummaryCSV = () => {
   const filtered = useMemo(() => {
     return dealers
       .filter((d) => {
+        // CHANGE 1: Reps only see dealers assigned to them
+        if (isRep && d.assignedRepUsername !== session?.username) {
+          return false;
+        }
+        
         if (q) {
           const s = q.toLowerCase();
           const hay = [d.name, d.city || "", d.state, d.region].join(" ").toLowerCase();
@@ -928,19 +942,27 @@ const exportHomeDailySummaryCSV = () => {
         return true;
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [dealers, q, fRep, fState, fRegion, fType, fStatus, users]);
+  }, [dealers, q, fRep, fState, fRegion, fType, fStatus, users, isRep, session]);
 
   // Default (no search/filters): show only the 10 most recently visited
 const recentTop10 = useMemo(() => {
   return [...dealers]
+    .filter((d) => {
+      // CHANGE 1: Reps only see dealers assigned to them
+      if (isRep && d.assignedRepUsername !== session?.username) {
+        return false;
+      }
+      return true;
+    })
     .sort((a, b) => {
-      const ta = a.lastVisited ? Date.parse(a.lastVisited) : 0;
-      const tb = b.lastVisited ? Date.parse(b.lastVisited) : 0;
-      if (tb !== ta) return tb - ta; // newest first
+      // CHANGE 2: Dealers with no lastVisited (new dealers) float to top
+      const ta = a.lastVisited ? Date.parse(a.lastVisited) : Infinity;
+      const tb = b.lastVisited ? Date.parse(b.lastVisited) : Infinity;
+      if (tb !== ta) return tb - ta; // newest first (Infinity beats timestamps)
       return a.name.localeCompare(b.name); // tie-breaker
     })
     .slice(0, 10);
-}, [dealers]);
+}, [dealers, isRep, session]);
 
 // Pagination for search results
 const totalPages = isSearching ? Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)) : 1;
@@ -1235,8 +1257,8 @@ const paged = useMemo(() => {
       )}
     </div>
 
-    {/* Rep filter */}
-    <div className={`${isRep ? "hidden md:block" : ""}`}>
+    {/* Rep filter - hidden for Reps, only shown for Managers/Admins */}
+    {!isRep && (
       <SelectField
         label="Rep"
         value={fRep}
@@ -1249,7 +1271,7 @@ const paged = useMemo(() => {
           })),
         ]}
       />
-    </div>
+    )}
 
     {/* State filter */}
     <SelectField
