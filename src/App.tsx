@@ -2732,9 +2732,62 @@ const daysAgo = (iso?: string) => {
 
 const RepReportsView: React.FC<{
   session: User;
-}> = ({ session }) => {
+  dealers: Dealer[];
+  users: User[];
+}> = ({ session, dealers, users }) => {
   const reportUrl = session.reportUrl;
   const hasReport = reportUrl && reportUrl.trim().length > 0;
+
+  // Filter dealers that belong to this rep (explicit assignment OR territory)
+  const myDealers = dealers.filter((d) => {
+    // Option 1: Explicit assignment
+    if (d.assignedRepUsername === session.username) return true;
+    
+    // Option 2: Territory coverage
+    if (session.states.includes(d.state) && (session.regionsByState[d.state]?.includes(d.region) ?? false)) {
+      return true;
+    }
+    
+    return false;
+  });
+
+  // Export dealers to CSV
+  const exportDealers = () => {
+    // Sort by most recent visit (same as home screen)
+    const sorted = [...myDealers].sort((a, b) => {
+      const ta = a.lastVisited ? Date.parse(a.lastVisited) : Infinity;
+      const tb = b.lastVisited ? Date.parse(b.lastVisited) : Infinity;
+      if (tb !== ta) return tb - ta;
+      return a.name.localeCompare(b.name);
+    });
+
+    // Create CSV content
+    const headers = ['Dealer Name', 'State', 'Region', 'Type', 'Status', 'Last Visited'];
+    const rows = sorted.map(d => [
+      d.name,
+      d.state,
+      d.region,
+      d.type,
+      d.status,
+      d.lastVisited || 'Never'
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+
+    // Download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `my-dealers-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="space-y-6">
@@ -2817,6 +2870,90 @@ const RepReportsView: React.FC<{
           </div>
         </div>
       )}
+
+      {/* List of Dealers Export */}
+      <div className="bg-white rounded-lg shadow-sm border">
+        <div className="p-4 sm:p-6">
+          <div className="border-2 border-green-100 rounded-lg p-4 sm:p-6 bg-gradient-to-br from-white to-green-50 hover:shadow-lg transition-shadow">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div className="flex items-start gap-3 sm:gap-4 flex-1">
+                <div className="bg-green-100 p-2 sm:p-3 rounded-lg flex-shrink-0">
+                  <svg className="w-6 h-6 sm:w-8 sm:h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-lg sm:text-xl font-semibold text-slate-800 mb-2">📋 List of Dealers</h4>
+                  <p className="text-slate-600 text-sm mb-3 sm:mb-4">
+                    Export a complete list of all dealers in your territory, including last visit dates.
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    <span>{myDealers.length} dealer{myDealers.length !== 1 ? 's' : ''} in your territory</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col items-stretch sm:items-end gap-2">
+                <button
+                  onClick={exportDealers}
+                  className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors shadow-md hover:shadow-lg text-sm sm:text-base"
+                >
+                  Export to CSV
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </button>
+                <p className="text-xs text-slate-500 text-center sm:text-right">Downloads as CSV file</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Net Check Calculator */}
+      <div className="bg-white rounded-lg shadow-sm border">
+        <div className="p-4 sm:p-6">
+          <div className="border-2 border-purple-100 rounded-lg p-4 sm:p-6 bg-gradient-to-br from-white to-purple-50 hover:shadow-lg transition-shadow">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div className="flex items-start gap-3 sm:gap-4 flex-1">
+                <div className="bg-purple-100 p-2 sm:p-3 rounded-lg flex-shrink-0">
+                  <svg className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-lg sm:text-xl font-semibold text-slate-800 mb-2">🧮 Net Check Calculator</h4>
+                  <p className="text-slate-600 text-sm mb-3 sm:mb-4">
+                    Calculate dealer net checks, commissions, and payouts with our interactive calculator tool.
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    <span>Opens in new window</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col items-stretch sm:items-end gap-2">
+                <a
+                  href="https://cgavidia0362.github.io/dealercalculator/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-colors shadow-md hover:shadow-lg text-sm sm:text-base"
+                >
+                  Open Calculator
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </a>
+                <p className="text-xs text-slate-500 text-center sm:text-right">Opens in new tab</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -5891,7 +6028,7 @@ await syncLastVisitedFromNotes();
 )}
           {route === "reports" && session && (() => {
   const currentUser = users.find(u => u.username === session.username);
-  return currentUser ? <RepReportsView session={currentUser} /> : null;
+  return currentUser ? <RepReportsView session={currentUser} dealers={dealers} users={users} /> : null;
 })()}
            {route === "reporting" && <ReportingView dealers={dealers} users={users} notes={notes} session={session} />}
             
