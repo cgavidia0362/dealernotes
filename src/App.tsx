@@ -770,6 +770,7 @@ const DealerSearchView: React.FC<{
   const [dailyOpen, setDailyOpen] = useState(false);
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
   const [summaryRep, setSummaryRep] = useState<string>("ALL"); // Admin/Manager only: "ALL" or username
+  const [customDate, setCustomDate] = useState<string>(""); // Custom date picker (YYYY-MM-DD format)
 // Data fetched from Supabase for the Daily Summary (Home)
 const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
 const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
@@ -778,7 +779,7 @@ const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
 useEffect(() => {
   if (!dailyOpen) return;
 
-  // Compute [start, endExclusive] in UTC based on range
+  // Compute [start, endExclusive] in UTC based on range OR custom date
   const now = new Date();
   const startOfToday = new Date(Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0
@@ -787,26 +788,36 @@ useEffect(() => {
   let start = startOfToday;                    // inclusive
   let endExclusive = new Date(startOfToday);   // exclusive
   endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow 00:00Z
+  let labelText = "";
 
-  if (summaryRange === "yesterday") {
+  // If custom date is set, use that instead of preset ranges
+  if (customDate) {
+    const [year, month, day] = customDate.split('-').map(Number);
+    start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    endExclusive = new Date(start);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+    labelText = customDate;
+  } else if (summaryRange === "yesterday") {
     start = new Date(startOfToday);
     start.setUTCDate(start.getUTCDate() - 1);      // yesterday 00:00Z
     endExclusive = new Date(startOfToday);         // today 00:00Z
+    labelText = start.toISOString().slice(0, 10);
   } else if (summaryRange === "7d") {
     start = new Date(startOfToday);
     start.setUTCDate(start.getUTCDate() - 6);      // last 7 days inclusive
     endExclusive = new Date(startOfToday);
     endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    labelText = `${fmt(start)} – ${fmt(new Date(startOfToday))}`;
+  } else {
+    // "today"
+    labelText = start.toISOString().slice(0, 10);
   }
+
+  setHomeRangeLabel(labelText);
 
   const startISO = start.toISOString();
   const endISO = endExclusive.toISOString();
-
-  // Build a nice label like "YYYY-MM-DD" or "YYYY-MM-DD – YYYY-MM-DD"
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  setHomeRangeLabel(
-    summaryRange === "7d" ? `${fmt(start)} – ${fmt(new Date(startOfToday))}` : fmt(start)
-  );
 
   // Build query
   setLoadingHomeSummary(true);
@@ -842,7 +853,7 @@ useEffect(() => {
     }
     setLoadingHomeSummary(false);
   })();
-}, [dailyOpen, summaryRange, summaryRep, isRep, isAdminManager, session?.username]);
+}, [dailyOpen, summaryRange, summaryRep, customDate, isRep, isAdminManager, session?.username]);
 // Copy Home summary (uses fetched homeSummaryNotes)
 const copyHomeDailySummary = async () => {
   const lines = homeSummaryNotes
@@ -1604,12 +1615,36 @@ const paged = useMemo(() => {
     <select
       className="border rounded-lg px-2 py-1"
       value={summaryRange}
-      onChange={(e) => setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d')}
+      onChange={(e) => {
+        setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d');
+        setCustomDate(''); // Clear custom date when changing preset
+      }}
     >
       <option value="today">Today</option>
       <option value="yesterday">Yesterday</option>
       <option value="7d">Last 7 Days</option>
     </select>
+  </div>
+
+  {/* Custom Date Picker */}
+  <div className="flex items-center gap-2">
+    <label className="text-xs text-slate-600">📅 Or pick date:</label>
+    <input
+      type="date"
+      className="border rounded-lg px-2 py-1 text-sm"
+      value={customDate}
+      onChange={(e) => setCustomDate(e.target.value)}
+      max={new Date().toISOString().split('T')[0]} // Can't pick future dates
+    />
+    {customDate && (
+      <button
+        className="text-xs text-slate-500 hover:text-slate-700"
+        onClick={() => setCustomDate('')}
+        title="Clear custom date"
+      >
+        ✕
+      </button>
+    )}
   </div>
 
   {/* Rep filter (Admin/Manager only) */}
