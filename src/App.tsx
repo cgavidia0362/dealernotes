@@ -325,7 +325,7 @@ const useData = () => {
   const [dealers, setDealers] = useState<Dealer[]>(() => loadLS<Dealer[]>(LS_DEALERS, []));
   const [regions, setRegions] = useState<RegionsCatalog>(() => loadLS<RegionsCatalog>(LS_REGIONS, {}));
   const [tasks, setTasks] = useState<Task[]>(() => loadLS<Task[]>(LS_TASKS, []));
-  const [notes, setNotes] = useState<Note[]>(() => loadLS<Note[]>(LS_NOTES, []));
+  const [notes, setNotes] = useState<Note[]>([]); // Empty - notes load on-demand per feature
 
   // Normalize regions to include any state/region found on dealers (helps old seeds)
   useEffect(() => {
@@ -770,7 +770,6 @@ const DealerSearchView: React.FC<{
   const [dailyOpen, setDailyOpen] = useState(false);
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
   const [summaryRep, setSummaryRep] = useState<string>("ALL"); // Admin/Manager only: "ALL" or username
-  const [customDate, setCustomDate] = useState<string>(""); // Custom date picker (YYYY-MM-DD format)
 // Data fetched from Supabase for the Daily Summary (Home)
 const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
 const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
@@ -779,7 +778,7 @@ const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
 useEffect(() => {
   if (!dailyOpen) return;
 
-  // Compute [start, endExclusive] in UTC based on range OR custom date
+  // Compute [start, endExclusive] in UTC based on range
   const now = new Date();
   const startOfToday = new Date(Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0
@@ -788,36 +787,26 @@ useEffect(() => {
   let start = startOfToday;                    // inclusive
   let endExclusive = new Date(startOfToday);   // exclusive
   endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow 00:00Z
-  let labelText = "";
 
-  // If custom date is set, use that instead of preset ranges
-  if (customDate) {
-    const [year, month, day] = customDate.split('-').map(Number);
-    start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-    endExclusive = new Date(start);
-    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
-    labelText = customDate;
-  } else if (summaryRange === "yesterday") {
+  if (summaryRange === "yesterday") {
     start = new Date(startOfToday);
     start.setUTCDate(start.getUTCDate() - 1);      // yesterday 00:00Z
     endExclusive = new Date(startOfToday);         // today 00:00Z
-    labelText = start.toISOString().slice(0, 10);
   } else if (summaryRange === "7d") {
     start = new Date(startOfToday);
     start.setUTCDate(start.getUTCDate() - 6);      // last 7 days inclusive
     endExclusive = new Date(startOfToday);
     endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-    labelText = `${fmt(start)} – ${fmt(new Date(startOfToday))}`;
-  } else {
-    // "today"
-    labelText = start.toISOString().slice(0, 10);
   }
-
-  setHomeRangeLabel(labelText);
 
   const startISO = start.toISOString();
   const endISO = endExclusive.toISOString();
+
+  // Build a nice label like "YYYY-MM-DD" or "YYYY-MM-DD – YYYY-MM-DD"
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  setHomeRangeLabel(
+    summaryRange === "7d" ? `${fmt(start)} – ${fmt(new Date(startOfToday))}` : fmt(start)
+  );
 
   // Build query
   setLoadingHomeSummary(true);
@@ -853,7 +842,7 @@ useEffect(() => {
     }
     setLoadingHomeSummary(false);
   })();
-}, [dailyOpen, summaryRange, summaryRep, customDate, isRep, isAdminManager, session?.username]);
+}, [dailyOpen, summaryRange, summaryRep, isRep, isAdminManager, session?.username]);
 // Copy Home summary (uses fetched homeSummaryNotes)
 const copyHomeDailySummary = async () => {
   const lines = homeSummaryNotes
@@ -1615,36 +1604,12 @@ const paged = useMemo(() => {
     <select
       className="border rounded-lg px-2 py-1"
       value={summaryRange}
-      onChange={(e) => {
-        setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d');
-        setCustomDate(''); // Clear custom date when changing preset
-      }}
+      onChange={(e) => setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d')}
     >
       <option value="today">Today</option>
       <option value="yesterday">Yesterday</option>
       <option value="7d">Last 7 Days</option>
     </select>
-  </div>
-
-  {/* Custom Date Picker */}
-  <div className="flex items-center gap-2">
-    <label className="text-xs text-slate-600">📅 Or pick date:</label>
-    <input
-      type="date"
-      className="border rounded-lg px-2 py-1 text-sm"
-      value={customDate}
-      onChange={(e) => setCustomDate(e.target.value)}
-      max={new Date().toISOString().split('T')[0]} // Can't pick future dates
-    />
-    {customDate && (
-      <button
-        className="text-xs text-slate-500 hover:text-slate-700"
-        onClick={() => setCustomDate('')}
-        title="Clear custom date"
-      >
-        ✕
-      </button>
-    )}
   </div>
 
   {/* Rep filter (Admin/Manager only) */}
@@ -1796,18 +1761,20 @@ const DealerNotesView: React.FC<{
   users: User[];
   dealers: Dealer[];
   setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
-  notes: Note[];
-  setNotes: React.Dispatch<React.SetStateAction<Note[]>>;
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   regions: RegionsCatalog;
   setRoute: (r: RouteKey) => void;
   showToast: (m: string, k?: ToastKind) => void;
   showActionToast: (t: Omit<Toast, "id">) => string;
-}> = ({ session, users, dealers, setDealers, notes, setNotes, tasks, setTasks, regions, setRoute, showToast, showActionToast }) => {
+}> = ({ session, users, dealers, setDealers, tasks, setTasks, regions, setRoute, showToast, showActionToast }) => {
   const dealerId = loadLS<string | null>(LS_LAST_SELECTED_DEALER, null);
   const dealer = dealers.find((d) => d.id === dealerId) || null;
   const me = users.find((u) => u.username === session?.username) || null;
+
+  // Local notes state - only for this dealer
+  const [localNotes, setLocalNotes] = useState<Note[]>([]);
+  const [loadingNotes, setLoadingNotes] = useState(false);
 
   // Local delete modal state
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -2024,13 +1991,12 @@ const reasons /*: Dealer["noDealReasons"] | undefined*/ =
   // SUPER-SAFE useMemo: never index undefined
   const dealerNotesAll = useMemo(() => {
     try {
-      return notes
-        .filter((n) => n?.dealerId === dealer.id)
+      return localNotes
         .sort((a, b) => (a.tsISO > b.tsISO ? -1 : 1));
     } catch {
       return [];
     }
-  }, [notes, dealer.id]);
+  }, [localNotes]);
 
   // NEW: notes search query (filters BEFORE pagination)
   const [noteSearch, setNoteSearch] = useState("");
@@ -2063,6 +2029,9 @@ const reasons /*: Dealer["noDealReasons"] | undefined*/ =
   const canUseManagerNote = isAdminManager;
 // Load notes for this dealer from Supabase whenever the dealer changes
 useEffect(() => {
+  if (!dealer) return;
+  
+  setLoadingNotes(true);
   (async () => {
     const { data, error } = await supabase
       .from('dealer_notes')
@@ -2072,6 +2041,7 @@ useEffect(() => {
 
     if (error) {
       console.error(error);
+      setLoadingNotes(false);
       return;
     }
 
@@ -2085,13 +2055,11 @@ useEffect(() => {
       text: r.text,
     }));
 
-    // Replace any existing notes for THIS dealer with the fresh list
-    setNotes(prev => {
-      const others = prev.filter(n => n.dealerId !== dealer.id);
-      return [...others, ...mapped];
-    });
+    // Set local notes (don't accumulate in global state)
+    setLocalNotes(mapped);
+    setLoadingNotes(false);
   })();
-}, [dealer.id]);
+}, [dealer?.id]);
 const addNote = async () => {
   if (!repCanAccess) return showToast("You don't have access to add notes.", "error");
   if (isSavingNote) return;
@@ -2116,7 +2084,7 @@ const addNote = async () => {
     pending: true,
   };
 
-  setNotes(prev => [optimistic, ...prev]);
+  setLocalNotes(prev => [optimistic, ...prev]);
   setNoteText("");
 
   const saveOnce = async () => {
@@ -2165,7 +2133,7 @@ const addNote = async () => {
       text: data.text,
       pending: false,
     };
-    setNotes(prev => prev.map(n => (n.id === tempId ? saved : n)));
+    setLocalNotes(prev => prev.map(n => (n.id === tempId ? saved : n)));
     showToast("Note saved successfully!", "success");
   };
 
@@ -2173,7 +2141,7 @@ const addNote = async () => {
     await saveOnce();
   } catch (e: any) {
     console.log("NOTE SAVE ERROR:", JSON.stringify(e));
-    setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
+    setLocalNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
 
     const errorMsg = e.message?.includes("timeout")
       ? "Save timed out - check your connection and retry"
@@ -2185,11 +2153,11 @@ const addNote = async () => {
       actionLabel: "Retry",
       onAction: async () => {
         setIsSavingNote(true);
-        setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: true, failed: false } : n)));
+        setLocalNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: true, failed: false } : n)));
         try {
           await saveOnce();
         } catch {
-          setNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
+          setLocalNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
           showToast("Still failed. Check your internet connection.", "error");
         } finally {
           setIsSavingNote(false);
@@ -2197,7 +2165,7 @@ const addNote = async () => {
       },
       secondaryLabel: "Undo",
       onSecondary: () => {
-        setNotes(prev => prev.filter(n => n.id !== tempId));
+        setLocalNotes(prev => prev.filter(n => n.id !== tempId));
         setIsSavingNote(false);
       },
     });
@@ -2259,7 +2227,7 @@ const doDeleteDealer = async () => {
   // Local clean-up so the screen updates immediately
   setDealers((prev) => prev.filter((d) => d.id !== dealer.id));
   setTasks((prev) => prev.filter((t) => t.dealerId !== dealer.id));
-  setNotes((prev) => prev.filter((n) => n.dealerId !== dealer.id));
+  // Note: localNotes cleanup not needed - we're navigating away
 
   showToast(`Dealer "${dealer.name}" deleted.`, "success");
   setDeleteOpen(false);
@@ -2597,7 +2565,8 @@ const doDeleteDealer = async () => {
           />
         </div>
 
-        {paged.length === 0 && <div className="text-sm text-slate-500">No notes{noteSearch.trim() ? " match your search." : " yet."}</div>}
+        {loadingNotes && <div className="text-sm text-slate-500">Loading notes...</div>}
+        {!loadingNotes && paged.length === 0 && <div className="text-sm text-slate-500">No notes{noteSearch.trim() ? " match your search." : " yet."}</div>}
 
         <div className="space-y-3">
           {paged.map((n) => {
@@ -6041,8 +6010,6 @@ await syncLastVisitedFromNotes();
                 users={users}
                 dealers={dealers}
                 setDealers={setDealers}
-                notes={notes}
-                setNotes={setNotes}
                 tasks={tasks}
                 setTasks={setTasks}
                 regions={regions}
