@@ -894,7 +894,7 @@ const exportHomeDailySummaryCSV = () => {
 };
 
   // helpers
-  const repOptions = users.filter((u) => u.role === "Rep");
+  const repOptions = users.filter((u) => u.role === "Rep" || u.role === "Manager");
 
   const stateOptions = useMemo(() => {
     const set = new Set<string>(Object.keys(regions));
@@ -1421,9 +1421,7 @@ const paged = useMemo(() => {
                   <td className="py-1.5 px-2 md:py-2 md:px-3">
                     <div className="flex items-center gap-2">
                       <span>{repNameForDealer(d)}</span>
-                      {hasOverride && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">override</span>
-                      )}
+                      {/* Override badge removed per user request - functionality preserved */}
                     </div>
                   </td>
 
@@ -1847,7 +1845,8 @@ const DealerNotesView: React.FC<{
     !!me?.regionsByState?.[dealer.state] &&
     !!me?.regionsByState?.[dealer.state]?.includes?.(dealer.region);
 
-  const repHasCoverage = isRep && coversState && coversRegion;
+  // Reps can access any dealer in states they cover (state-level access, not region-specific)
+  const repHasCoverage = isRep && coversState;
   const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
 
   /* -------------------------- Status / Details ------------------------- */
@@ -2107,6 +2106,8 @@ const addNote = async () => {
   const authUserId = authData.user.id;
 
   setIsSavingNote(true);
+  
+  const saveStartTime = Date.now(); // Track when save started
 
   const tempId = `${session?.username || "unknown"}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const optimistic: Note = {
@@ -2175,7 +2176,51 @@ const addNote = async () => {
   try {
     await saveOnce();
   } catch (e: any) {
-    console.log("NOTE SAVE ERROR:", JSON.stringify(e));
+    const saveEndTime = Date.now();
+    const saveDuration = saveEndTime - saveStartTime;
+    
+    // ============ DETAILED ERROR LOGGING ============
+    console.group("🔴 NOTE SAVE ERROR - DETAILED DIAGNOSTICS");
+    console.log("⏱️ TIMING:");
+    console.log("  - Started at:", new Date(saveStartTime).toISOString());
+    console.log("  - Failed at:", new Date(saveEndTime).toISOString());
+    console.log("  - Duration:", saveDuration, "ms", `(${(saveDuration / 1000).toFixed(1)}s)`);
+    console.log("");
+    console.log("❌ ERROR DETAILS:");
+    console.log("  - Error type:", e?.constructor?.name || "Unknown");
+    console.log("  - Error message:", e?.message || "No message");
+    console.log("  - Full error object:", JSON.stringify(e, null, 2));
+    console.log("");
+    console.log("📝 CONTEXT:");
+    console.log("  - Username:", session?.username);
+    console.log("  - Dealer:", dealer.name);
+    console.log("  - Dealer ID:", dealer.id);
+    console.log("  - Note category:", noteCategory);
+    console.log("  - Note length:", text.length, "chars");
+    console.log("  - Client ID:", tempId);
+    console.log("");
+    console.log("🌐 NETWORK:");
+    console.log("  - Online status:", navigator.onLine ? "ONLINE" : "OFFLINE");
+    console.log("  - Connection type:", (navigator as any).connection?.effectiveType || "Unknown");
+    console.log("  - Downlink speed:", (navigator as any).connection?.downlink || "Unknown", "Mbps");
+    console.groupEnd();
+    
+    // Check if note actually saved despite the error
+    setTimeout(async () => {
+      try {
+        const { data: verifyData } = await supabase
+          .from("dealer_notes")
+          .select("id")
+          .eq("client_id", tempId)
+          .maybeSingle();
+        
+        console.log("🔍 VERIFICATION CHECK:", verifyData ? "✅ NOTE EXISTS IN DATABASE (false positive timeout)" : "❌ NOTE DOES NOT EXIST (real failure)");
+      } catch (verifyErr) {
+        console.log("🔍 VERIFICATION CHECK: Could not verify (network issue)");
+      }
+    }, 1000);
+    // ============ END DETAILED LOGGING ============
+    
     setLocalNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
 
     const errorMsg = e.message?.includes("timeout")
@@ -2475,12 +2520,12 @@ const doDeleteDealer = async () => {
         <div className="rounded-xl border bg-white p-5 shadow-sm space-y-4">
         {isAdminManager && (
   <div>
-    <div className="text-slate-800 font-semibold mb-2">Assigned Rep (override)</div>
+    <div className="text-slate-800 font-semibold mb-2">Assigned Rep</div>
     <SelectField
       label="Assigned Rep"
       value={dealer.assignedRepUsername || ""}
       onChange={(v) => changeAssignedRep(v)}
-      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
+      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep" || u.role === "Manager").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
     />
   </div>
 )}
