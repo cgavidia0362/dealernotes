@@ -779,39 +779,49 @@ const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
 useEffect(() => {
   if (!dailyOpen) return;
 
-  // Compute [start, endExclusive] in UTC based on range OR custom date
+  // Compute [start, endExclusive] in LOCAL timezone (not UTC) to match user's clock
   const now = new Date();
-  const startOfToday = new Date(Date.UTC(
-    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0
-  ));
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0); // Local midnight
 
-  let start = startOfToday;                    // inclusive
-  let endExclusive = new Date(startOfToday);   // exclusive
-  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow 00:00Z
+  let start = new Date(startOfToday);              // inclusive
+  let endExclusive = new Date(startOfToday);       // exclusive
+  endExclusive.setDate(endExclusive.getDate() + 1); // tomorrow 00:00 local
   let labelText = "";
 
   // If custom date is set, use that instead of preset ranges
   if (customDate) {
     const [year, month, day] = customDate.split('-').map(Number);
-    start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    start = new Date(year, month - 1, day, 0, 0, 0, 0); // Local midnight
     endExclusive = new Date(start);
-    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+    endExclusive.setDate(endExclusive.getDate() + 1);
     labelText = customDate;
   } else if (summaryRange === "yesterday") {
     start = new Date(startOfToday);
-    start.setUTCDate(start.getUTCDate() - 1);      // yesterday 00:00Z
-    endExclusive = new Date(startOfToday);         // today 00:00Z
-    labelText = start.toISOString().slice(0, 10);
+    start.setDate(start.getDate() - 1);           // yesterday 00:00 local
+    endExclusive = new Date(startOfToday);        // today 00:00 local
+    const y = start.getFullYear();
+    const m = String(start.getMonth() + 1).padStart(2, '0');
+    const d = String(start.getDate()).padStart(2, '0');
+    labelText = `${y}-${m}-${d}`;
   } else if (summaryRange === "7d") {
     start = new Date(startOfToday);
-    start.setUTCDate(start.getUTCDate() - 6);      // last 7 days inclusive
+    start.setDate(start.getDate() - 6);           // last 7 days inclusive
     endExclusive = new Date(startOfToday);
-    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1); // tomorrow
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    endExclusive.setDate(endExclusive.getDate() + 1); // tomorrow
+    const fmt = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
     labelText = `${fmt(start)} – ${fmt(new Date(startOfToday))}`;
   } else {
     // "today"
-    labelText = start.toISOString().slice(0, 10);
+    const y = start.getFullYear();
+    const m = String(start.getMonth() + 1).padStart(2, '0');
+    const d = String(start.getDate()).padStart(2, '0');
+    labelText = `${y}-${m}-${d}`;
   }
 
   setHomeRangeLabel(labelText);
@@ -2283,7 +2293,41 @@ const addNote = async () => {
     } else {
       showToast('Task completed.', 'success');
     }
-  };  
+  };
+
+  /* ---------------------------- Delete Note ----------------------------- */
+  const deleteNote = async (noteId: string, noteAuthor: string) => {
+    // Permission check: Managers/Admins can delete any note, Reps can only delete their own
+    const canDelete = isAdminManager || (isRep && noteAuthor === session?.username);
+    
+    if (!canDelete) {
+      return showToast("You don't have permission to delete this note.", "error");
+    }
+
+    // Confirmation
+    if (!window.confirm("Delete this note? This cannot be undone.")) {
+      return;
+    }
+
+    // Optimistic UI - remove from local state immediately
+    setLocalNotes(prev => prev.filter(n => n.id !== noteId));
+
+    // Delete from Supabase
+    const { error } = await supabase
+      .from('dealer_notes')
+      .delete()
+      .eq('id', noteId);
+
+    if (error) {
+      console.error("Failed to delete note:", error);
+      showToast("Failed to delete note. Please try again.", "error");
+      // Note: We don't restore the note to local state since it's gone from UI
+      // User can refresh to see it again if delete failed
+    } else {
+      showToast("Note deleted successfully.", "success");
+    }
+  };
+  
   /* ------------------------------ Delete -------------------------------- */
  // Delete from Supabase first (if this has a real DB id), then clean up locally
 const doDeleteDealer = async () => {
@@ -2657,6 +2701,9 @@ const doDeleteDealer = async () => {
               dealer.assignedRepUsername === session?.username &&
               !!myOpenTaskForDealer;
 
+            // Show delete button if: (1) Manager/Admin can delete any note, (2) Rep can delete their own notes
+            const canDeleteNote = isAdminManager || (isRep && n.authorUsername === session?.username);
+
             return (
               <div key={n.id} className="border rounded-lg p-3">
                 <div className="flex items-center justify-between">
@@ -2666,15 +2713,26 @@ const doDeleteDealer = async () => {
                       by <strong>{n.authorUsername}</strong> • {new Date(n.tsISO).toLocaleString()}
                     </span>
                   </div>
-                  {showComplete && (
-                    <button
-                      className="px-2 py-1 rounded border border-green-600 text-green-700 hover:bg-green-50 text-xs"
-                      onClick={completeMyTask}
-                      title="Mark this manager task as completed"
-                    >
-                      Complete Task
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {showComplete && (
+                      <button
+                        className="px-2 py-1 rounded border border-green-600 text-green-700 hover:bg-green-50 text-xs"
+                        onClick={completeMyTask}
+                        title="Mark this manager task as completed"
+                      >
+                        Complete Task
+                      </button>
+                    )}
+                    {canDeleteNote && (
+                      <button
+                        className="px-2 py-1 rounded border border-red-600 text-red-700 hover:bg-red-50 text-xs"
+                        onClick={() => deleteNote(n.id, n.authorUsername)}
+                        title="Delete this note"
+                      >
+                        🗑️ Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
               </div>
