@@ -781,6 +781,26 @@ const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
 useEffect(() => {
   if (!dailyOpen) return;
 
+  // Refresh dealers list to ensure we have current names (in case any were renamed)
+  const refreshDealers = async () => {
+    const { data, error } = await supabase
+      .from("dealers")
+      .select("id, name, state, region, city, address, type, status");
+    if (!error && data) {
+      setDealers(data.map((d: any) => ({
+        id: d.id,
+        name: d.name,
+        state: d.state,
+        region: d.region,
+        city: d.city,
+        address: d.address,
+        type: d.type,
+        status: d.status,
+      })));
+    }
+  };
+  refreshDealers();
+
   // Compute [start, endExclusive] in LOCAL timezone (not UTC) to match user's clock
   const now = new Date();
   const startOfToday = new Date(now);
