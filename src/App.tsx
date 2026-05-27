@@ -785,7 +785,7 @@ useEffect(() => {
   const refreshDealers = async () => {
     const { data, error } = await supabase
       .from("dealers")
-      .select("id, name, state, region, city, address, type, status");
+      .select("id, name, state, region, city, address1, type, status, contacts, assigned_rep_username, last_visited, sending_deals, no_deal_reasons");
     if (!error && data) {
       setDealers(data.map((d: any) => ({
         id: d.id,
@@ -793,9 +793,14 @@ useEffect(() => {
         state: d.state,
         region: d.region,
         city: d.city,
-        address: d.address,
+        address1: d.address1,
         type: d.type,
         status: d.status,
+        contacts: d.contacts || [],
+        assignedRepUsername: d.assigned_rep_username,
+        lastVisited: d.last_visited,
+        sendingDeals: d.sending_deals,
+        noDealReasons: d.no_deal_reasons,
       })));
     }
   };
