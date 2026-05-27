@@ -7615,9 +7615,35 @@ const exportDailySummaryCSV = () => {
       
               {todaysNotes.map((n) => {
                 const d = dealers.find((x) => x.id === n.dealerId);
-                // If dealer not found in local list, show a helpful message instead of "(dealer removed)"
-                const dealerDisplay = d ? d.name : n.dealerId ? "(dealer name not available)" : "(dealer removed)";
+                // Show dealer name if found, otherwise show placeholder
+                const dealerDisplay = d ? d.name : "(Loading dealer...)";
                 const regionDisplay = d ? `${d.region}, ${d.state}` : "";
+                
+                // If dealer not found and we have a dealerId, try to fetch it
+                if (!d && n.dealerId) {
+                  // Use a key-based approach to fetch missing dealers
+                  (async () => {
+                    const { data } = await supabase
+                      .from("dealers")
+                      .select("id, name, state, region")
+                      .eq("id", n.dealerId)
+                      .single();
+                    if (data && !dealers.find(x => x.id === n.dealerId)) {
+                      // Add the fetched dealer to the list
+                      setDealers([...dealers, {
+                        id: data.id,
+                        name: data.name,
+                        state: data.state,
+                        region: data.region,
+                        city: "",
+                        address1: "",
+                        type: "Independent" as DealerType,
+                        status: "Active" as DealerStatus,
+                        contacts: [],
+                      }]);
+                    }
+                  })();
+                }
                 
                 return (
                   <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
