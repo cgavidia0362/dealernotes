@@ -771,6 +771,8 @@ const DealerSearchView: React.FC<{
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
   const [summaryRep, setSummaryRep] = useState<string>("ALL"); // Admin/Manager only: "ALL" or username
   const [customDate, setCustomDate] = useState<string>(""); // Custom date picker (YYYY-MM-DD format)
+  const [startDate, setStartDate] = useState<string>(""); // Date range: start date
+  const [endDate, setEndDate] = useState<string>(""); // Date range: end date
 // Data fetched from Supabase for the Daily Summary (Home)
 const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
 const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
@@ -789,14 +791,24 @@ useEffect(() => {
   endExclusive.setDate(endExclusive.getDate() + 1); // tomorrow 00:00 local
   let labelText = "";
 
-  // If custom date is set, use that instead of preset ranges
-  if (customDate) {
+  // Priority 1: Date range (if both start and end dates are set)
+  if (startDate && endDate) {
+    const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+    const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+    start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
+    endExclusive = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999); // End of end date
+    labelText = `${startDate} – ${endDate}`;
+  }
+  // Priority 2: Single custom date
+  else if (customDate) {
     const [year, month, day] = customDate.split('-').map(Number);
     start = new Date(year, month - 1, day, 0, 0, 0, 0); // Local midnight
     endExclusive = new Date(start);
     endExclusive.setDate(endExclusive.getDate() + 1);
     labelText = customDate;
-  } else if (summaryRange === "yesterday") {
+  }
+  // Priority 3: Preset ranges
+  else if (summaryRange === "yesterday") {
     start = new Date(startOfToday);
     start.setDate(start.getDate() - 1);           // yesterday 00:00 local
     endExclusive = new Date(startOfToday);        // today 00:00 local
@@ -863,7 +875,7 @@ useEffect(() => {
     }
     setLoadingHomeSummary(false);
   })();
-}, [dailyOpen, summaryRange, summaryRep, customDate, isRep, isAdminManager, session?.username]);
+}, [dailyOpen, summaryRange, summaryRep, customDate, startDate, endDate, isRep, isAdminManager, session?.username]);
 // Copy Home summary (uses fetched homeSummaryNotes)
 const copyHomeDailySummary = async () => {
   const lines = homeSummaryNotes
@@ -1626,6 +1638,8 @@ const paged = useMemo(() => {
       onChange={(e) => {
         setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d');
         setCustomDate(''); // Clear custom date when changing preset
+        setStartDate(''); // Clear date range when changing preset
+        setEndDate('');
       }}
     >
       <option value="today">Today</option>
@@ -1641,7 +1655,11 @@ const paged = useMemo(() => {
       type="date"
       className="border rounded-lg px-2 py-1 text-sm"
       value={customDate}
-      onChange={(e) => setCustomDate(e.target.value)}
+      onChange={(e) => {
+        setCustomDate(e.target.value);
+        setStartDate(''); // Clear date range when single date is picked
+        setEndDate('');
+      }}
       max={new Date().toISOString().split('T')[0]} // Can't pick future dates
     />
     {customDate && (
@@ -1653,6 +1671,48 @@ const paged = useMemo(() => {
         ✕
       </button>
     )}
+  </div>
+
+  {/* Date Range Picker */}
+  <div className="flex items-center gap-2 flex-wrap">
+    <label className="text-xs text-slate-600">📅 Or date range:</label>
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-slate-600">From:</span>
+      <input
+        type="date"
+        className="border rounded-lg px-2 py-1 text-sm"
+        value={startDate}
+        onChange={(e) => {
+          setStartDate(e.target.value);
+          setCustomDate(''); // Clear single date when range is picked
+        }}
+        max={endDate || new Date().toISOString().split('T')[0]}
+      />
+      <span className="text-xs text-slate-600">To:</span>
+      <input
+        type="date"
+        className="border rounded-lg px-2 py-1 text-sm"
+        value={endDate}
+        onChange={(e) => {
+          setEndDate(e.target.value);
+          setCustomDate(''); // Clear single date when range is picked
+        }}
+        min={startDate}
+        max={new Date().toISOString().split('T')[0]}
+      />
+      {(startDate || endDate) && (
+        <button
+          className="text-xs text-slate-500 hover:text-slate-700"
+          onClick={() => {
+            setStartDate('');
+            setEndDate('');
+          }}
+          title="Clear date range"
+        >
+          ✕
+        </button>
+      )}
+    </div>
   </div>
 
   {/* Rep filter (Admin/Manager only) */}
@@ -7530,10 +7590,14 @@ const exportDailySummaryCSV = () => {
       
               {todaysNotes.map((n) => {
                 const d = dealers.find((x) => x.id === n.dealerId);
+                // If dealer not found in local list, show a helpful message instead of "(dealer removed)"
+                const dealerDisplay = d ? d.name : n.dealerId ? "(dealer name not available)" : "(dealer removed)";
+                const regionDisplay = d ? `${d.region}, ${d.state}` : "";
+                
                 return (
                   <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
-                    <div className="font-semibold">{d ? d.name : "(dealer removed)"}</div>
-                    <div className="text-xs text-slate-500 mb-1">{d ? `${d.region}, ${d.state}` : ""}</div>
+                    <div className="font-semibold">{dealerDisplay}</div>
+                    {regionDisplay && <div className="text-xs text-slate-500 mb-1">{regionDisplay}</div>}
                     <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
                       {n.category}
                     </div>
