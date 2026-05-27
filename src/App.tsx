@@ -901,6 +901,46 @@ useEffect(() => {
     setLoadingHomeSummary(false);
   })();
 }, [dailyOpen, summaryRange, summaryRep, customDate, startDate, endDate, isRep, isAdminManager, session?.username]);
+
+// Fetch missing dealers for Daily Summary notes (handles renamed dealers)
+useEffect(() => {
+  if (!dailyOpen || homeSummaryNotes.length === 0) return;
+  
+  (async () => {
+    // Find dealer IDs that are in notes but not in dealers list
+    const missingDealerIds = new Set<string>();
+    for (const note of homeSummaryNotes) {
+      if (note.dealerId && !dealers.find(d => d.id === note.dealerId)) {
+        missingDealerIds.add(note.dealerId);
+      }
+    }
+    
+    if (missingDealerIds.size === 0) return; // All dealers found
+    
+    // Fetch missing dealers from database
+    const { data, error } = await supabase
+      .from("dealers")
+      .select("id, name, state, region, city, address1, type, status, contacts")
+      .in("id", Array.from(missingDealerIds));
+    
+    if (!error && data && data.length > 0) {
+      // Add fetched dealers to the list
+      const newDealers = data.map((d: any) => ({
+        id: d.id,
+        name: d.name,
+        state: d.state,
+        region: d.region,
+        city: d.city || "",
+        address1: d.address1 || "",
+        type: d.type || ("Independent" as DealerType),
+        status: d.status || ("Active" as DealerStatus),
+        contacts: d.contacts || [],
+      }));
+      setDealers([...dealers, ...newDealers]);
+    }
+  })();
+}, [dailyOpen, homeSummaryNotes, dealers]);
+
 // Copy Home summary (uses fetched homeSummaryNotes)
 const copyHomeDailySummary = async () => {
   const lines = homeSummaryNotes
@@ -7615,35 +7655,8 @@ const exportDailySummaryCSV = () => {
       
               {todaysNotes.map((n) => {
                 const d = dealers.find((x) => x.id === n.dealerId);
-                // Show dealer name if found, otherwise show placeholder
-                const dealerDisplay = d ? d.name : "(Loading dealer...)";
+                const dealerDisplay = d ? d.name : "(dealer removed)";
                 const regionDisplay = d ? `${d.region}, ${d.state}` : "";
-                
-                // If dealer not found and we have a dealerId, try to fetch it
-                if (!d && n.dealerId) {
-                  // Use a key-based approach to fetch missing dealers
-                  (async () => {
-                    const { data } = await supabase
-                      .from("dealers")
-                      .select("id, name, state, region")
-                      .eq("id", n.dealerId)
-                      .single();
-                    if (data && !dealers.find(x => x.id === n.dealerId)) {
-                      // Add the fetched dealer to the list
-                      setDealers([...dealers, {
-                        id: data.id,
-                        name: data.name,
-                        state: data.state,
-                        region: data.region,
-                        city: "",
-                        address1: "",
-                        type: "Independent" as DealerType,
-                        status: "Active" as DealerStatus,
-                        contacts: [],
-                      }]);
-                    }
-                  })();
-                }
                 
                 return (
                   <div key={`${n.dealerId}-${n.tsISO}`} className="py-3">
