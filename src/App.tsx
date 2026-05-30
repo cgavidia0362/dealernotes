@@ -2541,7 +2541,7 @@ const doDeleteDealer = async () => {
 
     {/* Right: status, last-visited, and actions */}
     <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-    <a href="#DEALER_DATABASE_URL"
+    <a href="https://datatportal.vercel.app/dealer-report.html"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium transition-colors"
@@ -3261,7 +3261,7 @@ const RepReportsView: React.FC<{
          </div>
          <div className="flex flex-col items-stretch sm:items-end gap-2">
            
-         <a href="#DEALER_DATABASE_URL"
+         <a href="https://datatportal.vercel.app/dealer-report.html"
              target="_blank"
              rel="noopener noreferrer"
              className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors shadow-md hover:shadow-lg text-sm sm:text-base"
