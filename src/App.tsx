@@ -2508,11 +2508,10 @@ const doDeleteDealer = async () => {
         </div>
       </div>
 
- {/* Summary */}
+{/* Summary */}
 <div className="rounded-xl border bg-white p-5 shadow-sm">
   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
     <div>
-      {/* Name: input only while editing; otherwise plain text */}
       {canEditSection ? (
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <input
@@ -2525,7 +2524,6 @@ const doDeleteDealer = async () => {
       ) : (
         <div className="text-xl font-semibold text-slate-800">{dealer.name}</div>
       )}
-
       <div className="text-sm text-slate-600">
         {dealer.region}, {dealer.state} • <span className="uppercase">{dealer.type}</span>
         <div className="mt-1">
@@ -2539,61 +2537,69 @@ const doDeleteDealer = async () => {
       </div>
     </div>
 
-    {/* Right: status, last-visited, and actions */}
-    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-    <a href="https://datatportal.vercel.app/dealer-report.html"
+    {/* Right side — stacks on mobile, inline on desktop */}
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
+
+      {/* Status badge + last visited */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(dealer.status)}`}>
+          {dealer.status}
+        </span>
+        <span className="text-sm text-slate-600">Last visited: {dealer.lastVisited || "—"}</span>
+      </div>
+
+{/* Dealer Database button + Edit/Save/Cancel */}
+<div className="flex items-center gap-2 flex-wrap">
+        
+<a href="https://datatportal.vercel.app/dealer-report.html"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium transition-colors"
       >
-        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
-        </svg>
-        Dealer Database
-        <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-        </svg>
-      </a>
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(dealer.status)}`}>
-        {dealer.status}
-      </span>
-      <div className="text-sm text-slate-600">Last visited: {dealer.lastVisited || "-"}</div>
+          <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
+          </svg>
+          Dealer Database
+          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </a>
 
-      {/* Actions: Edit (if allowed) or Save/Cancel while editing */}
-      {!isEditing && repCanAccess && (
-        <button
-          onClick={() => setIsEditing(true)}
-          className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
-        >
-          Edit
-        </button>
-      )}
-
-      {isEditing && (
-        <>
+        {!isEditing && repCanAccess && (
           <button
-  onClick={saveAllAndClose}
-  className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
->
-  Save
-</button>
-          <button
-            onClick={() => {
-              setNameDraft(dealer.name);
-              setEditDetails({
-                ...dealer,
-                contacts: dealer.contacts?.length
-                  ? dealer.contacts.map((c) => ({ ...c }))
-                  : [{ name: "", phone: "" }],
-              });
-              setIsEditing(false);
-            }}
-            className="px-4 py-2 rounded-lg border border-slate-300"
+            onClick={() => setIsEditing(true)}
+            className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
           >
-            Cancel
+            Edit
           </button>
-        </>
-      )}
+        )}
+
+        {isEditing && (
+          <>
+            <button
+              onClick={saveAllAndClose}
+              className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+            >
+              Save
+            </button>
+            <button
+              onClick={() => {
+                setNameDraft(dealer.name);
+                setEditDetails({
+                  ...dealer,
+                  contacts: dealer.contacts?.length
+                    ? dealer.contacts.map((c) => ({ ...c }))
+                    : [{ name: "", phone: "" }],
+                });
+                setIsEditing(false);
+              }}
+              className="px-4 py-2 rounded-lg border border-slate-300"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
     </div>
   </div>
 </div>
