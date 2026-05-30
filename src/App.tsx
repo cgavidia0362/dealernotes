@@ -2540,7 +2540,20 @@ const doDeleteDealer = async () => {
     </div>
 
     {/* Right: status, last-visited, and actions */}
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+    <a href="#DEALER_DATABASE_URL"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium transition-colors"
+      >
+        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
+        </svg>
+        Dealer Database
+        <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+      </a>
       <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(dealer.status)}`}>
         {dealer.status}
       </span>
@@ -3216,7 +3229,50 @@ const RepReportsView: React.FC<{
                   </svg>
                 </a>
                 <p className="text-xs text-slate-500 text-center sm:text-right">Opens in new tab</p>
-              </div>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Dealer Database */}
+      <div className="bg-white rounded-lg shadow-sm border">
+   <div className="p-4 sm:p-6">
+     <div className="border-2 border-teal-100 rounded-lg p-4 sm:p-6 bg-gradient-to-br from-white to-teal-50 hover:shadow-lg transition-shadow">
+       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+         <div className="flex items-start gap-3 sm:gap-4 flex-1">
+           <div className="bg-teal-100 p-2 sm:p-3 rounded-lg flex-shrink-0">
+             <svg className="w-6 h-6 sm:w-8 sm:h-8 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
+             </svg>
+           </div>
+           <div className="flex-1 min-w-0">
+           <h4 className="text-lg sm:text-xl font-semibold text-slate-800 mb-2">🗄️ Dealer Database</h4>
+             <p className="text-slate-600 text-sm mb-3 sm:mb-4">
+               Access the full dealer database for reference, lookup, and research.
+             </p>
+             <div className="flex items-center gap-2 text-xs text-slate-500">
+               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+               </svg>
+               <span>Opens in new tab</span>
+             </div>
+           </div>
+         </div>
+         <div className="flex flex-col items-stretch sm:items-end gap-2">
+           
+         <a href="#DEALER_DATABASE_URL"
+             target="_blank"
+             rel="noopener noreferrer"
+             className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors shadow-md hover:shadow-lg text-sm sm:text-base"
+           >
+             Open Database
+             <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+             </svg>
+           </a>
+           <p className="text-xs text-slate-500 text-center sm:text-right">Opens in new tab</p>
+           </div>
             </div>
           </div>
         </div>
