@@ -1013,17 +1013,11 @@ const exportHomeDailySummaryCSV = () => {
   const filtered = useMemo(() => {
     // Helper: Check if Rep covers this dealer (either explicit assignment OR territory)
     const repCoversDealer = (d: Dealer): boolean => {
-      if (!isRep || !session) return true; // Managers/Admins see everything
-      
-      // Option 1: Explicit assignment (override)
-      if (d.assignedRepUsername === session.username) return true;
-      
-      // Option 2: Territory coverage
+      if (!isRep || !session) return true; // Admins/Managers see everything
       const me = users.find(u => u.username === session.username);
-      if (me && me.states.includes(d.state) && (me.regionsByState[d.state]?.includes(d.region) ?? false)) {
-        return true;
-      }
-      
+      if (!me) return false;
+      // Rep sees ALL dealers in any state they cover, regardless of assignment
+      if (me.states.includes(d.state)) return true;
       return false;
     };
     
@@ -1057,23 +1051,16 @@ const exportHomeDailySummaryCSV = () => {
   }, [dealers, q, fRep, fState, fRegion, fType, fStatus, users, isRep, session]);
 
   // Default (no search/filters): show only the 10 most recently visited
-const recentTop10 = useMemo(() => {
-  return [...dealers]
-    .filter((d) => {
-      // CHANGE 1: Reps only see dealers they cover (assignment OR territory)
-      if (!isRep || !session) return true; // Managers/Admins see everything
-      
-      // Option 1: Explicit assignment (override)
-      if (d.assignedRepUsername === session.username) return true;
-      
-      // Option 2: Territory coverage
-      const me = users.find(u => u.username === session.username);
-      if (me && me.states.includes(d.state) && (me.regionsByState[d.state]?.includes(d.region) ?? false)) {
-        return true;
-      }
-      
-      return false;
-    })
+  const recentTop10 = useMemo(() => {
+    return [...dealers]
+      .filter((d) => {
+        if (!isRep || !session) return true; // Admins/Managers see everything
+        const me = users.find(u => u.username === session.username);
+        if (!me) return false;
+        // Rep sees ALL dealers in any state they cover, regardless of assignment
+        if (me.states.includes(d.state)) return true;
+        return false;
+      })
     .sort((a, b) => {
       // CHANGE 2: Dealers with no lastVisited (new dealers) float to top
       const ta = a.lastVisited ? Date.parse(a.lastVisited) : Infinity;
