@@ -6200,10 +6200,11 @@ const syncLastVisitedFromNotes = async () => {
       (async () => {
         try {
           const { data, error } = await supabase
-            .from("dealers")
-            .select(
-              "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
-            );
+          .from("dealers")
+          .select(
+            "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
+          )
+          .limit(2000);
   
           if (error) throw error;
   
