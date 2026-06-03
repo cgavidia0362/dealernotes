@@ -6199,12 +6199,22 @@ const syncLastVisitedFromNotes = async () => {
   
       (async () => {
         try {
-          const { data, error } = await supabase
-          .from("dealers")
-          .select(
-            "id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals"
-          )
-          .limit(2000);
+          const [batch1, batch2] = await Promise.all([
+            supabase
+              .from("dealers")
+              .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
+              .range(0, 999),
+            supabase
+              .from("dealers")
+              .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
+              .range(1000, 1999),
+          ]);
+          
+          if (batch1.error) throw batch1.error;
+          if (batch2.error) throw batch2.error;
+          
+          const data = [...(batch1.data || []), ...(batch2.data || [])];
+          const error = null;
   
           if (error) throw error;
   
