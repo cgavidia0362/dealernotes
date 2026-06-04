@@ -6379,6 +6379,8 @@ await syncLastVisitedFromNotes();
   <DealerMasterListView
     dealers={dealers}
     setDealers={setDealers}
+    users={users}
+    regions={regions}
     showToast={showToast}
   />
 )}
@@ -8123,8 +8125,10 @@ const exportDailySummaryCSV = () => {
 const DealerMasterListView: React.FC<{
   dealers: Dealer[];
   setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
+  users: User[];
+  regions: RegionsCatalog;
   showToast: (m: string, k?: ToastKind) => void;
-}> = ({ dealers, setDealers, showToast }) => {
+}> = ({ dealers, setDealers, users, regions, showToast }) => {
   const PAGE_SIZE = 20;
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
@@ -8132,19 +8136,11 @@ const DealerMasterListView: React.FC<{
   const [fStatus, setFStatus] = useState("");
   const [fType, setFType] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [cifDrafts, setCifDrafts] = useState<Record<string, string>>({});
+  const [editDraft, setEditDraft] = useState<any>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Initialize CIF drafts from dealers
-  useEffect(() => {
-    const drafts: Record<string, string> = {};
-    for (const d of dealers) {
-      drafts[d.id] = (d as any).cifNumber || "";
-    }
-    setCifDrafts(drafts);
-  }, [dealers]);
-
   const stateOptions = useMemo(() => Array.from(new Set(dealers.map(d => d.state))).sort(), [dealers]);
+  const allUsers = useMemo(() => users.filter(u => u.status !== "Inactive"), [users]);
 
   const filtered = useMemo(() => {
     const sq = q.trim().toLowerCase();
@@ -8153,7 +8149,11 @@ const DealerMasterListView: React.FC<{
       if (fStatus && d.status !== fStatus) return false;
       if (fType && d.type !== fType) return false;
       if (sq) {
-        const hay = [d.name, d.state, d.region, d.city || "", (d as any).cifNumber || ""].join(" ").toLowerCase();
+        const hay = [
+          d.name, d.state, d.region, d.city || "",
+          (d as any).cifNumber || "",
+          d.assignedRepUsername || ""
+        ].join(" ").toLowerCase();
         if (!hay.includes(sq)) return false;
       }
       return true;
@@ -8168,35 +8168,78 @@ const DealerMasterListView: React.FC<{
 
   useEffect(() => setPage(1), [q, fState, fStatus, fType]);
 
-  const saveCif = async (dealerId: string) => {
-    const cif = (cifDrafts[dealerId] || "").trim();
+  const startEdit = (d: Dealer) => {
+    setEditingId(d.id);
+    setEditDraft({
+      name: d.name,
+      state: d.state,
+      region: d.region,
+      type: d.type,
+      status: d.status,
+      address1: d.address1 || "",
+      city: d.city || "",
+      zip: d.zip || "",
+      assignedRepUsername: d.assignedRepUsername || "",
+      cifNumber: (d as any).cifNumber || "",
+    });
+  };
+
+  const saveEdit = async (dealerId: string) => {
     try {
-      const { error } = await supabase
-        .from("dealers")
-        .update({ cif_number: cif || null })
-        .eq("id", dealerId);
+      const patch = {
+        name: editDraft.name?.trim(),
+        state: editDraft.state,
+        region: editDraft.region,
+        type: editDraft.type,
+        status: editDraft.status,
+        address1: editDraft.address1?.trim() || null,
+        city: editDraft.city?.trim() || null,
+        zip: editDraft.zip?.trim() || null,
+        assigned_rep_username: editDraft.assignedRepUsername || null,
+        cif_number: editDraft.cifNumber?.trim() || null,
+      };
+
+      const { error } = await supabase.from("dealers").update(patch).eq("id", dealerId);
       if (error) throw error;
-      setDealers(prev => prev.map(d => d.id === dealerId ? { ...d, cifNumber: cif } as any : d));
-      showToast("CIF number saved.", "success");
+
+      setDealers(prev => prev.map(d => d.id === dealerId ? {
+        ...d,
+        name: patch.name,
+        state: patch.state,
+        region: patch.region,
+        type: patch.type as DealerType,
+        status: patch.status as DealerStatus,
+        address1: patch.address1 || "",
+        city: patch.city || "",
+        zip: patch.zip || "",
+        assignedRepUsername: patch.assigned_rep_username || undefined,
+        cifNumber: patch.cif_number || "",
+      } as any : d));
+
+      showToast("Dealer updated.", "success");
+      setEditingId(null);
     } catch (e: any) {
-      showToast(e?.message || "Failed to save CIF.", "error");
+      showToast(e?.message || "Failed to save.", "error");
     }
-    setEditingId(null);
   };
 
   const exportCSV = () => {
-    const rows: (string | number)[][] = [["DN ID", "CIF Number", "Dealer Name", "State", "Region", "Type", "Status", "Address 1", "Address 2", "City", "ZIP"]];
+    const rows: (string | number)[][] = [[
+      "DN ID", "CIF Number", "Dealer Name", "Rep", "State", "Region",
+      "Type", "Status", "Address", "City", "ZIP"
+    ]];
     for (const d of filtered) {
+      const rep = users.find(u => u.username === d.assignedRepUsername);
       rows.push([
         d.id,
         (d as any).cifNumber || "",
         d.name,
+        rep ? rep.name : "",
         d.state,
         d.region,
         d.type,
         d.status,
         d.address1 || "",
-        d.address2 || "",
         d.city || "",
         d.zip || "",
       ]);
@@ -8242,13 +8285,14 @@ const DealerMasterListView: React.FC<{
           updated++;
         }
       }
-      showToast(`Updated CIF numbers for ${updated} dealer(s).`, "success");
+      showToast(`Updated CIF for ${updated} dealer(s).`, "success");
     } catch (e: any) {
       showToast(e?.message || "Upload failed.", "error");
     }
   };
 
   const shortId = (id: string) => id.slice(0, 8) + "…";
+  const regionOptions = (state: string) => (regions[state] || []);
 
   return (
     <div className="space-y-4">
@@ -8267,13 +8311,13 @@ const DealerMasterListView: React.FC<{
             onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.currentTarget.value = ""; }}
           />
           <button
-            className="px-3 py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium flex items-center gap-1"
+            className="px-3 py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium"
             onClick={() => fileInputRef.current?.click()}
           >
             ↑ Upload CSV
           </button>
           <button
-            className="px-3 py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium flex items-center gap-1"
+            className="px-3 py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
             onClick={exportCSV}
           >
             ↓ Export
@@ -8284,10 +8328,10 @@ const DealerMasterListView: React.FC<{
       {/* Filters */}
       <div className="rounded-xl border bg-white p-4 shadow-sm">
         <div className="flex flex-col md:flex-row gap-3">
-          <div className="flex-1 relative">
+          <div className="flex-1">
             <input
               className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-              placeholder="Search name, state, region, CIF…"
+              placeholder="Search name, rep, state, region, CIF…"
               value={q}
               onChange={e => setQ(e.target.value)}
             />
@@ -8301,12 +8345,13 @@ const DealerMasterListView: React.FC<{
 
       {/* Table */}
       <div className="rounded-xl border bg-white shadow-sm overflow-x-auto">
-        <table className="w-full text-sm" style={{ minWidth: "900px" }}>
+        <table className="w-full text-sm" style={{ minWidth: "1100px" }}>
           <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="py-2 px-3 text-left">DN ID</th>
               <th className="py-2 px-3 text-left">CIF #</th>
               <th className="py-2 px-3 text-left">Dealer Name</th>
+              <th className="py-2 px-3 text-left">Rep</th>
               <th className="py-2 px-3 text-left">State</th>
               <th className="py-2 px-3 text-left">Region</th>
               <th className="py-2 px-3 text-left">Type</th>
@@ -8318,55 +8363,85 @@ const DealerMasterListView: React.FC<{
           </thead>
           <tbody>
             {paged.map(d => {
-              const isEditingCif = editingId === d.id;
+              const isEditing = editingId === d.id;
+              const repName = users.find(u => u.username === d.assignedRepUsername)?.name || "—";
+
+              if (isEditing) {
+                return (
+                  <tr key={d.id} className="border-t bg-blue-50">
+                    <td className="py-2 px-3 text-xs text-slate-400 font-mono">{shortId(d.id)}</td>
+                    <td className="py-2 px-3">
+                      <input className="w-24 rounded border px-2 py-1 text-xs" value={editDraft.cifNumber} onChange={e => setEditDraft((p: any) => ({ ...p, cifNumber: e.target.value }))} />
+                    </td>
+                    <td className="py-2 px-3">
+                      <input className="w-36 rounded border px-2 py-1 text-xs" value={editDraft.name} onChange={e => setEditDraft((p: any) => ({ ...p, name: e.target.value }))} />
+                    </td>
+                    <td className="py-2 px-3">
+                      <select className="rounded border px-2 py-1 text-xs" value={editDraft.assignedRepUsername} onChange={e => setEditDraft((p: any) => ({ ...p, assignedRepUsername: e.target.value }))}>
+                        <option value="">— None —</option>
+                        {allUsers.map(u => <option key={u.username} value={u.username}>{u.name} ({u.username})</option>)}
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <select className="rounded border px-2 py-1 text-xs" value={editDraft.state} onChange={e => setEditDraft((p: any) => ({ ...p, state: e.target.value, region: "" }))}>
+                        {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <select className="rounded border px-2 py-1 text-xs" value={editDraft.region} onChange={e => setEditDraft((p: any) => ({ ...p, region: e.target.value }))}>
+                        <option value="">— Select —</option>
+                        {regionOptions(editDraft.state).map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <select className="rounded border px-2 py-1 text-xs" value={editDraft.type} onChange={e => setEditDraft((p: any) => ({ ...p, type: e.target.value }))}>
+                        <option value="Independent">Independent</option>
+                        <option value="Franchise">Franchise</option>
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <select className="rounded border px-2 py-1 text-xs" value={editDraft.status} onChange={e => setEditDraft((p: any) => ({ ...p, status: e.target.value }))}>
+                        {["Active","Pending","Prospect","Inactive","Black Listed"].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <input className="w-36 rounded border px-2 py-1 text-xs" value={editDraft.address1} onChange={e => setEditDraft((p: any) => ({ ...p, address1: e.target.value }))} />
+                    </td>
+                    <td className="py-2 px-3">
+                      <input className="w-28 rounded border px-2 py-1 text-xs" value={editDraft.city} onChange={e => setEditDraft((p: any) => ({ ...p, city: e.target.value }))} />
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="flex items-center gap-2">
+                        <button className="text-xs text-green-700 hover:underline font-medium" onClick={() => saveEdit(d.id)}>Save</button>
+                        <button className="text-xs text-slate-500 hover:underline" onClick={() => setEditingId(null)}>Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }
+
               return (
                 <tr key={d.id} className="border-t hover:bg-slate-50">
                   <td className="py-2 px-3 text-xs text-slate-400 font-mono">{shortId(d.id)}</td>
-                  <td className="py-2 px-3">
-                    {isEditingCif ? (
-                      <div className="flex items-center gap-1">
-                        <input
-                          className="w-24 rounded border px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-blue-500"
-                          value={cifDrafts[d.id] || ""}
-                          onChange={e => setCifDrafts(prev => ({ ...prev, [d.id]: e.target.value }))}
-                          onKeyDown={e => { if (e.key === "Enter") saveCif(d.id); if (e.key === "Escape") setEditingId(null); }}
-                          autoFocus
-                        />
-                        <button className="text-xs text-green-700 hover:underline" onClick={() => saveCif(d.id)}>Save</button>
-                        <button className="text-xs text-slate-500 hover:underline" onClick={() => setEditingId(null)}>✕</button>
-                      </div>
-                    ) : (
-                      <span
-                        className="cursor-pointer text-slate-700 hover:text-blue-700 hover:underline"
-                        onClick={() => setEditingId(d.id)}
-                        title="Click to edit CIF"
-                      >
-                        {(d as any).cifNumber || <span className="text-slate-300">—</span>}
-                      </span>
-                    )}
-                  </td>
+                  <td className="py-2 px-3 text-slate-600">{(d as any).cifNumber || <span className="text-slate-300">—</span>}</td>
                   <td className="py-2 px-3 font-medium text-slate-800">{d.name}</td>
+                  <td className="py-2 px-3 text-slate-600">{repName}</td>
                   <td className="py-2 px-3">{d.state}</td>
                   <td className="py-2 px-3">{d.region}</td>
                   <td className="py-2 px-3">{d.type}</td>
                   <td className="py-2 px-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
                   </td>
-                  <td className="py-2 px-3 text-slate-600">{[d.address1, d.address2].filter(Boolean).join(", ") || "—"}</td>
+                  <td className="py-2 px-3 text-slate-600">{d.address1 || "—"}</td>
                   <td className="py-2 px-3 text-slate-600">{d.city || "—"}</td>
                   <td className="py-2 px-3">
-                    <button
-                      className="text-xs text-blue-700 hover:underline"
-                      onClick={() => setEditingId(d.id)}
-                    >
-                      Edit CIF
-                    </button>
+                    <button className="text-xs text-blue-700 hover:underline" onClick={() => startEdit(d)}>Edit</button>
                   </td>
                 </tr>
               );
             })}
             {paged.length === 0 && (
-              <tr><td colSpan={10} className="py-8 text-center text-slate-500">No dealers match your search.</td></tr>
+              <tr><td colSpan={11} className="py-8 text-center text-slate-500">No dealers match your search.</td></tr>
             )}
           </tbody>
         </table>
