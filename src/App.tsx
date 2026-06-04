@@ -116,7 +116,7 @@ type Task = {
   completedAtISO?: string; // ← NEW (for “Complete Task”)
 };
 
-type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset";
+type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset" | "master-list";
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
 const LS_DEALERS = "demo_dealers";
@@ -558,8 +558,11 @@ const TopBar: React.FC<{
               {(session?.role === "Admin" || session?.role === "Manager") && (
   <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
 )}
-             {session?.role === "Admin" && (
+{session?.role === "Admin" && (             
   <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+)}
+{session?.role === "Admin" && (
+  <Tab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
 )}
             </nav>
           )}
@@ -615,6 +618,9 @@ const TopBar: React.FC<{
 )}
            {session?.role === "Admin" && (
   <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+)}
+{session?.role === "Admin" && (
+  <MobileTab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
 )}
             <button className="ml-auto px-3 py-2 text-sm text-blue-600" onClick={onLogout}>
               Log Off
@@ -6199,22 +6205,22 @@ const syncLastVisitedFromNotes = async () => {
   
       (async () => {
         try {
-          const [batch1, batch2] = await Promise.all([
-            supabase
-              .from("dealers")
-              .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
-              .range(0, 999),
-            supabase
-              .from("dealers")
-              .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
-              .range(1000, 1999),
-          ]);
-          
-          if (batch1.error) throw batch1.error;
-          if (batch2.error) throw batch2.error;
-          
-          const data = [...(batch1.data || []), ...(batch2.data || [])];
-          const error = null;
+          let allDealers: any[] = [];
+let from = 0;
+const batchSize = 1000;
+while (true) {
+  const { data: batch, error: batchError } = await supabase
+    .from("dealers")
+    .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
+    .range(from, from + batchSize - 1);
+  if (batchError) throw batchError;
+  if (!batch || batch.length === 0) break;
+  allDealers = [...allDealers, ...batch];
+  if (batch.length < batchSize) break;
+  from += batchSize;
+}
+const data = allDealers;
+const error = null;
   
           if (error) throw error;
   
@@ -6369,6 +6375,13 @@ await syncLastVisitedFromNotes();
                 showToast={showToast}
               />
             )}
+            {route === "master-list" && (
+  <DealerMasterListView
+    dealers={dealers}
+    setDealers={setDealers}
+    showToast={showToast}
+  />
+)}
           </main>
         </div>
       );
@@ -8102,6 +8115,272 @@ const exportDailySummaryCSV = () => {
             </div>
           )}
         </Modal>
+      )}
+    </div>
+  );
+};
+
+const DealerMasterListView: React.FC<{
+  dealers: Dealer[];
+  setDealers: React.Dispatch<React.SetStateAction<Dealer[]>>;
+  showToast: (m: string, k?: ToastKind) => void;
+}> = ({ dealers, setDealers, showToast }) => {
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [fState, setFState] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fType, setFType] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [cifDrafts, setCifDrafts] = useState<Record<string, string>>({});
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Initialize CIF drafts from dealers
+  useEffect(() => {
+    const drafts: Record<string, string> = {};
+    for (const d of dealers) {
+      drafts[d.id] = (d as any).cifNumber || "";
+    }
+    setCifDrafts(drafts);
+  }, [dealers]);
+
+  const stateOptions = useMemo(() => Array.from(new Set(dealers.map(d => d.state))).sort(), [dealers]);
+
+  const filtered = useMemo(() => {
+    const sq = q.trim().toLowerCase();
+    return dealers.filter(d => {
+      if (fState && d.state !== fState) return false;
+      if (fStatus && d.status !== fStatus) return false;
+      if (fType && d.type !== fType) return false;
+      if (sq) {
+        const hay = [d.name, d.state, d.region, d.city || "", (d as any).cifNumber || ""].join(" ").toLowerCase();
+        if (!hay.includes(sq)) return false;
+      }
+      return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [dealers, q, fState, fStatus, fType]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paged = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  useEffect(() => setPage(1), [q, fState, fStatus, fType]);
+
+  const saveCif = async (dealerId: string) => {
+    const cif = (cifDrafts[dealerId] || "").trim();
+    try {
+      const { error } = await supabase
+        .from("dealers")
+        .update({ cif_number: cif || null })
+        .eq("id", dealerId);
+      if (error) throw error;
+      setDealers(prev => prev.map(d => d.id === dealerId ? { ...d, cifNumber: cif } as any : d));
+      showToast("CIF number saved.", "success");
+    } catch (e: any) {
+      showToast(e?.message || "Failed to save CIF.", "error");
+    }
+    setEditingId(null);
+  };
+
+  const exportCSV = () => {
+    const rows: (string | number)[][] = [["DN ID", "CIF Number", "Dealer Name", "State", "Region", "Type", "Status", "Address 1", "Address 2", "City", "ZIP"]];
+    for (const d of filtered) {
+      rows.push([
+        d.id,
+        (d as any).cifNumber || "",
+        d.name,
+        d.state,
+        d.region,
+        d.type,
+        d.status,
+        d.address1 || "",
+        d.address2 || "",
+        d.city || "",
+        d.zip || "",
+      ]);
+    }
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `dealer-master-list-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleUpload = async (file: File) => {
+    try {
+      let text = await file.text();
+      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+      const header = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
+      const iName = header.findIndex(h => h.includes("dealer") || h === "name");
+      const iCif = header.findIndex(h => h.includes("cif"));
+      const iState = header.findIndex(h => h === "state" || h === "st");
+      if (iName < 0 || iCif < 0) {
+        showToast("CSV must have Dealer Name and CIF Number columns.", "error");
+        return;
+      }
+      let updated = 0;
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(",").map(c => c.replace(/^"|"$/g, "").trim());
+        const name = cols[iName] || "";
+        const cif = cols[iCif] || "";
+        const state = iState >= 0 ? cols[iState]?.toUpperCase() : "";
+        if (!name || !cif) continue;
+        const match = dealers.find(d =>
+          d.name.toLowerCase() === name.toLowerCase() &&
+          (state ? d.state === state : true)
+        );
+        if (!match) continue;
+        const { error } = await supabase.from("dealers").update({ cif_number: cif }).eq("id", match.id);
+        if (!error) {
+          setDealers(prev => prev.map(d => d.id === match.id ? { ...d, cifNumber: cif } as any : d));
+          updated++;
+        }
+      }
+      showToast(`Updated CIF numbers for ${updated} dealer(s).`, "success");
+    } catch (e: any) {
+      showToast(e?.message || "Upload failed.", "error");
+    }
+  };
+
+  const shortId = (id: string) => id.slice(0, 8) + "…";
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div className="text-xl font-semibold text-slate-800">Dealer Master List</div>
+          <div className="text-sm text-slate-500">{filtered.length.toLocaleString()} of {dealers.length.toLocaleString()} dealers</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.currentTarget.value = ""; }}
+          />
+          <button
+            className="px-3 py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium flex items-center gap-1"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            ↑ Upload CSV
+          </button>
+          <button
+            className="px-3 py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium flex items-center gap-1"
+            onClick={exportCSV}
+          >
+            ↓ Export
+          </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm">
+        <div className="flex flex-col md:flex-row gap-3">
+          <div className="flex-1 relative">
+            <input
+              className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              placeholder="Search name, state, region, CIF…"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+            />
+          </div>
+          <SelectField label="State" value={fState} onChange={setFState} options={[{ label: "All States", value: "" }, ...stateOptions.map(s => ({ label: s, value: s }))]} />
+          <SelectField label="Status" value={fStatus} onChange={setFStatus} options={[{ label: "All Statuses", value: "" }, ...["Active","Pending","Prospect","Inactive","Black Listed"].map(s => ({ label: s, value: s }))]} />
+          <SelectField label="Type" value={fType} onChange={setFType} options={[{ label: "All Types", value: "" }, { label: "Independent", value: "Independent" }, { label: "Franchise", value: "Franchise" }]} />
+          <button className="text-sm text-blue-700 hover:underline whitespace-nowrap" onClick={() => { setQ(""); setFState(""); setFStatus(""); setFType(""); }}>Clear</button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="rounded-xl border bg-white shadow-sm overflow-x-auto">
+        <table className="w-full text-sm" style={{ minWidth: "900px" }}>
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+            <tr>
+              <th className="py-2 px-3 text-left">DN ID</th>
+              <th className="py-2 px-3 text-left">CIF #</th>
+              <th className="py-2 px-3 text-left">Dealer Name</th>
+              <th className="py-2 px-3 text-left">State</th>
+              <th className="py-2 px-3 text-left">Region</th>
+              <th className="py-2 px-3 text-left">Type</th>
+              <th className="py-2 px-3 text-left">Status</th>
+              <th className="py-2 px-3 text-left">Address</th>
+              <th className="py-2 px-3 text-left">City</th>
+              <th className="py-2 px-3 text-left">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paged.map(d => {
+              const isEditingCif = editingId === d.id;
+              return (
+                <tr key={d.id} className="border-t hover:bg-slate-50">
+                  <td className="py-2 px-3 text-xs text-slate-400 font-mono">{shortId(d.id)}</td>
+                  <td className="py-2 px-3">
+                    {isEditingCif ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          className="w-24 rounded border px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                          value={cifDrafts[d.id] || ""}
+                          onChange={e => setCifDrafts(prev => ({ ...prev, [d.id]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === "Enter") saveCif(d.id); if (e.key === "Escape") setEditingId(null); }}
+                          autoFocus
+                        />
+                        <button className="text-xs text-green-700 hover:underline" onClick={() => saveCif(d.id)}>Save</button>
+                        <button className="text-xs text-slate-500 hover:underline" onClick={() => setEditingId(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <span
+                        className="cursor-pointer text-slate-700 hover:text-blue-700 hover:underline"
+                        onClick={() => setEditingId(d.id)}
+                        title="Click to edit CIF"
+                      >
+                        {(d as any).cifNumber || <span className="text-slate-300">—</span>}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 px-3 font-medium text-slate-800">{d.name}</td>
+                  <td className="py-2 px-3">{d.state}</td>
+                  <td className="py-2 px-3">{d.region}</td>
+                  <td className="py-2 px-3">{d.type}</td>
+                  <td className="py-2 px-3">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
+                  </td>
+                  <td className="py-2 px-3 text-slate-600">{[d.address1, d.address2].filter(Boolean).join(", ") || "—"}</td>
+                  <td className="py-2 px-3 text-slate-600">{d.city || "—"}</td>
+                  <td className="py-2 px-3">
+                    <button
+                      className="text-xs text-blue-700 hover:underline"
+                      onClick={() => setEditingId(d.id)}
+                    >
+                      Edit CIF
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {paged.length === 0 && (
+              <tr><td colSpan={10} className="py-8 text-center text-slate-500">No dealers match your search.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-slate-500">Page {page} of {totalPages}</div>
+          <div className="flex items-center gap-2">
+            <button className="px-3 py-1.5 rounded border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>Previous</button>
+            <button className="px-3 py-1.5 rounded border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next</button>
+          </div>
+        </div>
       )}
     </div>
   );
