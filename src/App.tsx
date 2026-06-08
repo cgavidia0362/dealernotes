@@ -8363,8 +8363,9 @@ const DealerMasterListView: React.FC<{
 
         const check = (field: string, oldVal: string, newVal: string) => {
           if (!newVal) return; // skip blanks — don't overwrite with empty
-          if (oldVal.trim().toLowerCase() !== newVal.trim().toLowerCase()) {
-            changes.push({ field, old: oldVal || "—", new: newVal });
+          const resolvedNew = newVal.trim().toLowerCase() === "none" ? "" : newVal;
+          if (oldVal.trim().toLowerCase() !== resolvedNew.trim().toLowerCase()) {
+            changes.push({ field, old: oldVal || "—", new: resolvedNew });
           }
         };
 
