@@ -5021,9 +5021,10 @@ const confirmImportDealers = async () => {
       zip: r.zip || "",
       contacts: Array.isArray(r.contacts) ? r.contacts : [],
       assignedRepUsername: r.assigned_rep_username || undefined,
-      lastVisited: r.last_visited ? String(r.last_visited) : undefined,
+      lastVisited: r.last_visited ? String(r.last_visited) : undefined, // keep YYYY-MM-DD
       sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
       noDealReasons: r.no_deal_reasons || undefined,
+      cifNumber: r.cif_number || undefined,
     }));
 
     setDealers(fromDb);
@@ -6211,7 +6212,7 @@ const batchSize = 1000;
 while (true) {
   const { data: batch, error: batchError } = await supabase
     .from("dealers")
-    .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals")
+    .select("id,name,state,region,type,status,address1,address2,city,zip,contacts,no_deal_reasons,assigned_rep_username,last_visited,sending_deals,cif_number")
     .range(from, from + batchSize - 1);
   if (batchError) throw batchError;
   if (!batch || batch.length === 0) break;
@@ -6240,6 +6241,7 @@ const error = null;
             lastVisited: r.last_visited ? String(r.last_visited) : undefined, // keep YYYY-MM-DD
             sendingDeals: typeof r.sending_deals === "boolean" ? r.sending_deals : undefined,
             noDealReasons: r.no_deal_reasons || undefined,
+            cifNumber: r.cif_number || undefined,
           }));
   
           // Replace local dealers with the shared list
@@ -8139,6 +8141,18 @@ const DealerMasterListView: React.FC<{
   const [editDraft, setEditDraft] = useState<any>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Upload preview state
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRows, setPreviewRows] = useState<{
+    id: string;
+    name: string;
+    changes: { field: string; old: string; new: string }[];
+    hasChanges: boolean;
+    notFound: boolean;
+  }[]>([]);
+  const [previewStats, setPreviewStats] = useState({ total: 0, withChanges: 0, noChanges: 0, notFound: 0 });
+  const [importing, setImporting] = useState(false);
+
   const stateOptions = useMemo(() => Array.from(new Set(dealers.map(d => d.state))).sort(), [dealers]);
   const allUsers = useMemo(() => users.filter(u => u.status !== "Inactive"), [users]);
 
@@ -8198,10 +8212,8 @@ const DealerMasterListView: React.FC<{
         assigned_rep_username: editDraft.assignedRepUsername || null,
         cif_number: editDraft.cifNumber?.trim() || null,
       };
-
       const { error } = await supabase.from("dealers").update(patch).eq("id", dealerId);
       if (error) throw error;
-
       setDealers(prev => prev.map(d => d.id === dealerId ? {
         ...d,
         name: patch.name,
@@ -8215,7 +8227,6 @@ const DealerMasterListView: React.FC<{
         assignedRepUsername: patch.assigned_rep_username || undefined,
         cifNumber: patch.cif_number || "",
       } as any : d));
-
       showToast("Dealer updated.", "success");
       setEditingId(null);
     } catch (e: any) {
@@ -8254,45 +8265,209 @@ const DealerMasterListView: React.FC<{
     document.body.removeChild(a);
   };
 
+  // Parse CSV and build preview
   const handleUpload = async (file: File) => {
     try {
       let text = await file.text();
       if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-      const header = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
-      const iName = header.findIndex(h => h.includes("dealer") || h === "name");
-      const iCif = header.findIndex(h => h.includes("cif"));
-      const iState = header.findIndex(h => h === "state" || h === "st");
-      if (iName < 0 || iCif < 0) {
-        showToast("CSV must have Dealer Name and CIF Number columns.", "error");
-        return;
-      }
-      let updated = 0;
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",").map(c => c.replace(/^"|"$/g, "").trim());
-        const name = cols[iName] || "";
-        const cif = cols[iCif] || "";
-        const state = iState >= 0 ? cols[iState]?.toUpperCase() : "";
-        if (!name || !cif) continue;
-        const match = dealers.find(d =>
-          d.name.toLowerCase() === name.toLowerCase() &&
-          (state ? d.state === state : true)
+
+      // Parse CSV properly (handles quoted fields)
+      const parseCSV = (src: string): string[][] => {
+        const rows: string[][] = [];
+        let row: string[] = [];
+        let field = "";
+        let inQuotes = false;
+        let i = 0;
+        while (i < src.length) {
+          const ch = src[i];
+          if (inQuotes) {
+            if (ch === '"' && src[i + 1] === '"') { field += '"'; i += 2; continue; }
+            if (ch === '"') { inQuotes = false; i++; continue; }
+            field += ch; i++; continue;
+          }
+          if (ch === '"') { inQuotes = true; i++; continue; }
+          if (ch === ',') { row.push(field); field = ""; i++; continue; }
+          if (ch === '\r') { i++; continue; }
+          if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+          field += ch; i++;
+        }
+        row.push(field);
+        rows.push(row);
+        return rows.map(r => r.map(c => c.trim())).filter(r => r.some(c => c));
+      };
+
+      const parsed = parseCSV(text);
+      if (parsed.length < 2) { showToast("CSV appears empty.", "error"); return; }
+
+      const header = parsed[0].map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+
+      // Map column indices
+      const iId     = header.findIndex(h => h === "dnid" || h === "id");
+      const iCif    = header.findIndex(h => h.includes("cif"));
+      const iName   = header.findIndex(h => h.includes("dealer") || h === "name");
+      const iRep    = header.findIndex(h => h === "rep");
+      const iState  = header.findIndex(h => h === "state" || h === "st");
+      const iRegion = header.findIndex(h => h === "region" || h === "area");
+      const iType   = header.findIndex(h => h === "type");
+      const iStatus = header.findIndex(h => h === "status");
+      const iAddr   = header.findIndex(h => h.includes("address") || h === "addr");
+      const iCity   = header.findIndex(h => h === "city");
+      const iZip    = header.findIndex(h => h === "zip" || h.includes("postal"));
+
+      if (iId < 0) { showToast("CSV must have a DN ID column.", "error"); return; }
+
+      // Build dealer lookup by ID
+      const dealerById = new Map(dealers.map(d => [d.id, d]));
+
+      // Helper: find rep username by name
+      const findRepUsername = (repName: string): string => {
+        if (!repName) return "";
+        const lower = repName.trim().toLowerCase();
+        const match = users.find(u =>
+          u.name.toLowerCase() === lower ||
+          u.username.toLowerCase() === lower
         );
-        if (!match) continue;
-        const { error } = await supabase.from("dealers").update({ cif_number: cif }).eq("id", match.id);
-        if (!error) {
-          setDealers(prev => prev.map(d => d.id === match.id ? { ...d, cifNumber: cif } as any : d));
-          updated++;
+        return match?.username || "";
+      };
+
+      const rows: typeof previewRows = [];
+      let withChanges = 0;
+      let noChanges = 0;
+      let notFound = 0;
+
+      for (let i = 1; i < parsed.length; i++) {
+        const cols = parsed[i];
+        const id = cols[iId] || "";
+        if (!id) continue;
+
+        const existing = dealerById.get(id);
+        if (!existing) {
+          notFound++;
+          rows.push({ id, name: cols[iName] || id, changes: [], hasChanges: false, notFound: true });
+          continue;
+        }
+
+        const csvCif    = iCif    >= 0 ? cols[iCif]    || "" : "";
+        const csvName   = iName   >= 0 ? cols[iName]   || "" : "";
+        const csvState  = iState  >= 0 ? cols[iState]  || "" : "";
+        const csvRegion = iRegion >= 0 ? cols[iRegion] || "" : "";
+        const csvType   = iType   >= 0 ? cols[iType]   || "" : "";
+        const csvStatus = iStatus >= 0 ? cols[iStatus] || "" : "";
+        const csvAddr   = iAddr   >= 0 ? cols[iAddr]   || "" : "";
+        const csvCity   = iCity   >= 0 ? cols[iCity]   || "" : "";
+        const csvZip    = iZip    >= 0 ? cols[iZip]    || "" : "";
+        const csvRepName = iRep   >= 0 ? cols[iRep]    || "" : "";
+        const csvRepUsername = findRepUsername(csvRepName);
+
+        const changes: { field: string; old: string; new: string }[] = [];
+
+        const check = (field: string, oldVal: string, newVal: string) => {
+          if (!newVal) return; // skip blanks — don't overwrite with empty
+          if (oldVal.trim().toLowerCase() !== newVal.trim().toLowerCase()) {
+            changes.push({ field, old: oldVal || "—", new: newVal });
+          }
+        };
+
+        check("CIF Number",  (existing as any).cifNumber || "", csvCif);
+        check("Dealer Name", existing.name,                     csvName);
+        check("State",       existing.state,                    csvState);
+        check("Region",      existing.region,                   csvRegion);
+        check("Type",        existing.type,                     csvType);
+        check("Status",      existing.status,                   csvStatus);
+        check("Address",     existing.address1 || "",           csvAddr);
+        check("City",        existing.city || "",               csvCity);
+        check("ZIP",         existing.zip || "",                csvZip);
+        if (csvRepUsername) {
+          check("Rep", existing.assignedRepUsername || "", csvRepUsername);
+        }
+
+        if (changes.length > 0) {
+          withChanges++;
+          rows.push({ id, name: existing.name, changes, hasChanges: true, notFound: false });
+        } else {
+          noChanges++;
+          rows.push({ id, name: existing.name, changes: [], hasChanges: false, notFound: false });
         }
       }
-      showToast(`Updated CIF for ${updated} dealer(s).`, "success");
+
+      setPreviewRows(rows);
+      setPreviewStats({ total: parsed.length - 1, withChanges, noChanges, notFound });
+      setPreviewOpen(true);
     } catch (e: any) {
-      showToast(e?.message || "Upload failed.", "error");
+      showToast(e?.message || "Failed to parse CSV.", "error");
+    }
+  };
+
+  // Confirm and apply all changes
+  const confirmImport = async () => {
+    setImporting(true);
+    try {
+      const rowsWithChanges = previewRows.filter(r => r.hasChanges && !r.notFound);
+      let successCount = 0;
+
+      for (const row of rowsWithChanges) {
+        const existing = dealers.find(d => d.id === row.id);
+        if (!existing) continue;
+
+        // Build patch from changes
+        const patch: any = {};
+        for (const change of row.changes) {
+          switch (change.field) {
+            case "CIF Number":  patch.cif_number = change.new; break;
+            case "Dealer Name": patch.name = change.new; break;
+            case "State":       patch.state = change.new; break;
+            case "Region":      patch.region = change.new; break;
+            case "Type":        patch.type = change.new; break;
+            case "Status":      patch.status = change.new; break;
+            case "Address":     patch.address1 = change.new; break;
+            case "City":        patch.city = change.new; break;
+            case "ZIP":         patch.zip = change.new; break;
+            case "Rep": {
+              patch.assigned_rep_username = change.new || null;
+              break;
+            }
+          }
+        }
+
+        const { error } = await supabase.from("dealers").update(patch).eq("id", row.id);
+        if (!error) {
+          // Update local state
+          setDealers(prev => prev.map(d => {
+            if (d.id !== row.id) return d;
+            return {
+              ...d,
+              ...(patch.name && { name: patch.name }),
+              ...(patch.state && { state: patch.state }),
+              ...(patch.region && { region: patch.region }),
+              ...(patch.type && { type: patch.type as DealerType }),
+              ...(patch.status && { status: patch.status as DealerStatus }),
+              ...(patch.address1 !== undefined && { address1: patch.address1 }),
+              ...(patch.city !== undefined && { city: patch.city }),
+              ...(patch.zip !== undefined && { zip: patch.zip }),
+              ...("assigned_rep_username" in patch && { assignedRepUsername: patch.assigned_rep_username || undefined }),
+              ...(patch.cif_number !== undefined && { cifNumber: patch.cif_number } as any),
+            };
+          }));
+          successCount++;
+        }
+      }
+
+      showToast(`Updated ${successCount} dealer(s) successfully.`, "success");
+      setPreviewOpen(false);
+      setPreviewRows([]);
+    } catch (e: any) {
+      showToast(e?.message || "Import failed.", "error");
+    } finally {
+      setImporting(false);
     }
   };
 
   const shortId = (id: string) => id.slice(0, 8) + "…";
   const regionOptions = (state: string) => (regions[state] || []);
+
+  // Preview rows — only show ones with changes or not found (skip no-changes for clarity)
+  const previewWithChanges = previewRows.filter(r => r.hasChanges);
+  const previewNotFound = previewRows.filter(r => r.notFound);
 
   return (
     <div className="space-y-4">
@@ -8457,7 +8632,98 @@ const DealerMasterListView: React.FC<{
           </div>
         </div>
       )}
+
+      {/* Upload Preview Modal */}
+      {previewOpen && (
+        <Modal title="Upload Preview — Review Changes" onClose={() => { setPreviewOpen(false); setPreviewRows([]); }}>
+          <div className="space-y-4">
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-lg border p-3 bg-slate-50">
+                <div className="text-xs text-slate-500 uppercase tracking-wide">Total in CSV</div>
+                <div className="text-2xl font-semibold text-slate-800 mt-1">{previewStats.total}</div>
+              </div>
+              <div className="rounded-lg border p-3 bg-blue-50">
+                <div className="text-xs text-blue-600 uppercase tracking-wide">Will Update</div>
+                <div className="text-2xl font-semibold text-blue-700 mt-1">{previewStats.withChanges}</div>
+              </div>
+              <div className="rounded-lg border p-3 bg-green-50">
+                <div className="text-xs text-green-600 uppercase tracking-wide">No Changes</div>
+                <div className="text-2xl font-semibold text-green-700 mt-1">{previewStats.noChanges}</div>
+              </div>
+              <div className="rounded-lg border p-3 bg-red-50">
+                <div className="text-xs text-red-600 uppercase tracking-wide">Not Found</div>
+                <div className="text-2xl font-semibold text-red-700 mt-1">{previewStats.notFound}</div>
+              </div>
+            </div>
+
+            {/* Changes list */}
+            {previewWithChanges.length > 0 && (
+              <div>
+                <div className="text-sm font-semibold text-slate-700 mb-2">
+                  Dealers that will be updated ({previewWithChanges.length})
+                </div>
+                <div className="border rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+                  {previewWithChanges.map((row, idx) => (
+                    <div key={row.id} className={`p-3 ${idx % 2 === 0 ? "bg-white" : "bg-slate-50"} border-b last:border-b-0`}>
+                      <div className="font-medium text-slate-800 text-sm mb-1">{row.name}</div>
+                      <div className="space-y-1">
+                        {row.changes.map(c => (
+                          <div key={c.field} className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 w-24 flex-shrink-0">{c.field}:</span>
+                            <span className="text-red-600 line-through">{c.old}</span>
+                            <span className="text-slate-400">→</span>
+                            <span className="text-green-700 font-medium">{c.new}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Not found list */}
+            {previewNotFound.length > 0 && (
+              <div>
+                <div className="text-sm font-semibold text-red-700 mb-2">
+                  DN IDs not found in database ({previewNotFound.length}) — these will be skipped
+                </div>
+                <div className="border border-red-200 rounded-lg p-3 bg-red-50 max-h-32 overflow-y-auto">
+                  {previewNotFound.map(r => (
+                    <div key={r.id} className="text-xs text-red-700 font-mono">{r.id} — {r.name}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {previewWithChanges.length === 0 && previewNotFound.length === 0 && (
+              <div className="text-sm text-slate-500 text-center py-4">
+                No changes detected — all dealers are already up to date.
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t">
+              <button
+                className="px-4 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
+                onClick={() => { setPreviewOpen(false); setPreviewRows([]); }}
+                disabled={importing}
+              >
+                Cancel
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg bg-blue-600 text-white font-medium ${importing || previewWithChanges.length === 0 ? "opacity-50 cursor-not-allowed" : "hover:bg-blue-700"}`}
+                onClick={confirmImport}
+                disabled={importing || previewWithChanges.length === 0}
+              >
+                {importing ? "Updating…" : `Apply ${previewWithChanges.length} Update(s)`}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
-export default App;
