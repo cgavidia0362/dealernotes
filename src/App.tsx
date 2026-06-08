@@ -8727,3 +8727,4 @@ const DealerMasterListView: React.FC<{
     </div>
   );
 };
+export default App;
