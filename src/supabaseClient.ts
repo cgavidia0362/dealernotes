@@ -14,7 +14,12 @@ let client: SupabaseClient;
 if (url && anon) {
   // ✅ Real client (Production/Preview builds on Vercel)
   client = createClient(url, anon, {
-    auth: { autoRefreshToken: true, persistSession: true },
+    auth: { 
+      autoRefreshToken: true, 
+      persistSession: true,
+      storageKey: 'dealernotes-auth',
+      storage: window.localStorage,
+    },
   });
 } else if (isSandbox) {
   // 🧪 Sandbox-only: tiny no-op stub so the UI can render in StackBlitz
