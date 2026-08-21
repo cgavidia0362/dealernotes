@@ -987,7 +987,7 @@ const exportHomeDailySummaryCSV = () => {
 };
 
   // helpers
-  const repOptions = users.filter((u) => u.role === "Rep" || u.role === "Manager");
+  const repOptions = users.filter((u) => u.role === "Rep" || u.role === "Manager" || u.role === "Admin");
 
   const stateOptions = useMemo(() => {
     const set = new Set<string>(Object.keys(regions));
