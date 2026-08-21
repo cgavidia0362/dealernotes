@@ -541,13 +541,11 @@ const TopBar: React.FC<{
           {session && (
             <nav className="ml-6 hidden md:flex items-center gap-1">
               <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} /> 
-              {session?.role === "Rep" && (
-  <Tab
-    label="Rep Route"
-    active={route === "rep-route"}
-    onClick={() => setRoute("rep-route")}
-  />
-)}
+              <Tab
+  label="Rep Route"
+  active={route === "rep-route"}
+  onClick={() => setRoute("rep-route")}
+/>
               {session?.role === "Rep" && (
   <Tab
     label="Reports"
@@ -599,13 +597,11 @@ const TopBar: React.FC<{
         <div className="md:hidden border-t">
           <div className="flex">
             <MobileTab label="Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
-            {session?.role === "Rep" && (
-  <MobileTab
-    label="Route"
-    active={route === "rep-route"}
-    onClick={() => setRoute("rep-route")}
-  />
-)}
+            <MobileTab
+  label="Route"
+  active={route === "rep-route"}
+  onClick={() => setRoute("rep-route")}
+/>
             {session?.role === "Rep" && (
   <MobileTab
     label="Reports"
@@ -6865,12 +6861,10 @@ type RepRouteViewProps = {
 const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
   const { session, users, dealers, notes, setRoute, showToast } = props;
 
-  // find current profile; gate to Reps only
+  // find current profile
   const me = users.find((u) => u.username === session?.username) || null;
   const isRep = session?.role === "Rep";
-  if (!isRep) {
-    return <div className="p-6 text-center text-slate-600">This page is only for reps.</div>;
-  }
+  const isAdminManager = session?.role === "Admin" || session?.role === "Manager";
 
   // LS key helper
   const routeKeyForUser = (username?: string | null) => `${LS_REP_ROUTE}_${username || "anon"}`;
@@ -6972,17 +6966,18 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     };
   }, [me?.username]);
 
-  // which dealers can this rep see?
-  const accessibleDealers = useMemo(() => {
-    if (!me) return [] as Dealer[];
-    const can = (d: Dealer) => {
-      const assigned = d.assignedRepUsername === me.username;
-      const coversState = !!me.states?.includes?.(d.state);
-      const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
-      return assigned || (coversState && coversRegion);
-    };
-    return dealers.filter(can);
-  }, [dealers, me]);
+    // which dealers can this user see?
+    const accessibleDealers = useMemo(() => {
+      if (isAdminManager) return dealers; // Admins/Managers see all dealers, same as rest of the app
+      if (!me) return [] as Dealer[];
+      const can = (d: Dealer) => {
+        const assigned = d.assignedRepUsername === me.username;
+        const coversState = !!me.states?.includes?.(d.state);
+        const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
+        return assigned || (coversState && coversRegion);
+      };
+      return dealers.filter(can);
+    }, [dealers, me, isAdminManager]);
 
   // filters
   const unique = (arr: (string | undefined)[]) =>
