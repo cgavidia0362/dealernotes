@@ -7745,18 +7745,20 @@ const exportDailySummaryCSV = () => {
                   </div>
 
                   <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
+                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "up")} disabled={idx === 0}>↑</button>
+                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "down")} disabled={idx === sortedRoute.length - 1}>↓</button>
                     
-                  <a
-                  href={d ? mapUrl(d) : "#"}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`${actionBtn}`}
-                  >
-                    Maps
-                  </a>
-                  <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
-                  <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
-                </div>
+                    <a
+                    href={d ? mapUrl(d) : "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`${actionBtn}`}
+                    >
+                      Maps
+                    </a>
+                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
+                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
+                  </div>
               </div>
               );
             })}
