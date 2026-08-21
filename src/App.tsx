@@ -7026,6 +7026,15 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     saveLS(routeKeyForUser(session?.username), routeByDate);
   }, [routeByDate, session?.username]);
 
+  // Bulk-add all currently filtered/searched dealers
+  const addAllFiltered = async () => {
+    const toAdd = filtered.filter((d) => !routeIds.has(d.id));
+    for (const d of toAdd) {
+      await addDealer(d);
+    }
+    showToast(`Added ${toAdd.length} dealer(s) to route.`, "success");
+  };
+
   // add dealer to today’s route (local + supabase)
   const addDealer = async (d: Dealer) => {
     setRouteByDate((prev) => {
@@ -7354,12 +7363,26 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
 
   // navigation to a dealer’s notes page
   // Build a Google Maps URL for a dealer address
-const mapUrl = (d: Dealer) => {
-  const q = [d.name, d.address1, d.address2, d.city, d.state, d.zip]
-    .filter(Boolean)
-    .join(", ");
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
-};
+  const mapUrl = (d: Dealer) => {
+    const q = [d.name, d.address1, d.address2, d.city, d.state, d.zip]
+      .filter(Boolean)
+      .join(", ");
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+  };
+  
+  // Build a single multi-stop Google Maps directions link for the whole route
+  const allStopsMapUrl = () => {
+    const sorted = [...(routeByDate[dateStr] || [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const addresses = sorted
+      .map((r) => {
+        const d = dealers.find((x) => x.id === r.dealerId);
+        if (!d) return null;
+        return [d.address1, d.city, d.state, d.zip].filter(Boolean).join(", ");
+      })
+      .filter(Boolean) as string[];
+    if (addresses.length === 0) return "#";
+    return `https://www.google.com/maps/dir/${addresses.map((a) => encodeURIComponent(a)).join("/")}`;
+  };
 
   const viewDealer = (dealerId: string) => {
     saveLS(LS_LAST_SELECTED_DEALER, dealerId);
@@ -7371,6 +7394,27 @@ const mapUrl = (d: Dealer) => {
 
   // --- render ---
   const sortedRoute = [...route].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+  // Drag-and-drop reordering
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const reorderByDrag = async (dropIndex: number) => {
+    if (dragIndex === null || dragIndex === dropIndex) return;
+    const curr = [...sortedRoute];
+    const [moved] = curr.splice(dragIndex, 1);
+    curr.splice(dropIndex, 0, moved);
+    const renum = curr.map((r, idx) => ({ dealerId: r.dealerId, position: idx + 1 }));
+    setRouteByDate((prev) => ({ ...prev, [dateStr]: renum }));
+    setDragIndex(null);
+    // Sync new positions to Supabase
+    for (const r of renum) {
+      await supabase
+        .from("dealer_routes")
+        .update({ position: r.position })
+        .eq("user_id", me!.id)
+        .eq("date", dateStr)
+        .eq("dealer_id", r.dealerId);
+    }
+  };
 
   // Daily Summary modal state
   const [dailyOpen, setDailyOpen] = useState(false);
@@ -7527,17 +7571,36 @@ const exportDailySummaryCSV = () => {
           </button>
           <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
             Copy All
-          </button>
+            </button>
+        
+            <a
+            href={allStopsMapUrl()}
+            target="_blank"
+            rel="noreferrer"
+            className={`px-3 py-2 rounded-lg border ${sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
+          >
+            🗺️ Open Route in Maps
+          </a>
         </div>
       </div>
 
     {/* Search & Filters */}
 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-  <div className="flex items-center justify-between mb-3">
+<div className="flex items-center justify-between mb-3 flex-wrap gap-2">
     <h2 className="text-lg font-semibold">Find your dealers</h2>
-    <span className="text-sm text-slate-500">
-      {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
-    </span>
+    <div className="flex items-center gap-3">
+      <span className="text-sm text-slate-500">
+        {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
+      </span>
+      {filtered.length > 0 && (
+        <button
+          className="text-sm px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+          onClick={addAllFiltered}
+        >
+          + Add all {filtered.length} to route
+        </button>
+      )}
+    </div>
   </div>
 
   {/* Search input + filters (wrap nicely on mobile) */}
@@ -7657,34 +7720,44 @@ const exportDailySummaryCSV = () => {
           <div className="p-6 text-center text-slate-500">No dealers in the route yet. Add some from above.</div>
         ) : (
           <div className="space-y-2">
-            {sortedRoute.map((r, idx) => {
+{sortedRoute.map((r, idx) => {
               const d = dealers.find((x) => x.id === r.dealerId);
               return (
-                <div key={r.dealerId} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <div>
-                    <div className="font-semibold">{idx + 1}. {d?.name || "(dealer removed)"}</div>
-                    <div className="text-sm text-slate-600">
-                      {[d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ")}
+                <div
+                  key={r.dealerId}
+                  draggable
+                  onDragStart={() => setDragIndex(idx)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => reorderByDrag(idx)}
+                  onDragEnd={() => setDragIndex(null)}
+                  className={`flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3 cursor-move ${dragIndex === idx ? "opacity-50" : ""}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-400 select-none mt-1" title="Drag to reorder">⠿</span>
+                    <div>
+                      <div className="font-semibold">{idx + 1}. {d?.name || "(dealer removed)"}</div>
+                      <div className="text-sm text-slate-600">
+                        {[d?.address1, d?.address2, d?.city, d?.state, d?.zip].filter(Boolean).join(", ")}
+                      </div>
+                      <div className="text-xs text-slate-500">{d?.region || ""}</div>
+                      <div className="text-xs text-slate-500">Last Visited: {d?.lastVisited || "—"}</div>
                     </div>
-                    <div className="text-xs text-slate-500">{d?.region || ""}</div>
-                    <div className="text-xs text-slate-500">Last Visited: {d?.lastVisited || "—"}</div>
                   </div>
 
                   <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
-                    <a
-                      href={d ? mapUrl(d) : "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={`${actionBtn}`}
-                    >
-                      Maps
-                    </a>
-                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
-                    <button className={actionBtn} onClick={() => move(r.dealerId, "up")}>&uarr;</button>
-                    <button className={actionBtn} onClick={() => move(r.dealerId, "down")}>&darr;</button>
-                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
-                  </div>
+                    
+                  <a
+                  href={d ? mapUrl(d) : "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`${actionBtn}`}
+                  >
+                    Maps
+                  </a>
+                  <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
+                  <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
                 </div>
+              </div>
               );
             })}
           </div>
