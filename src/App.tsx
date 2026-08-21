@@ -775,7 +775,7 @@ const DealerSearchView: React.FC<{
 
   const [dailyOpen, setDailyOpen] = useState(false);
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
-  const [summaryRep, setSummaryRep] = useState<string>("ALL"); // Admin/Manager only: "ALL" or username
+  const [summaryRep, setSummaryRep] = useState<string>(session?.username || "ALL"); // defaults to logged-in user
   const [customDate, setCustomDate] = useState<string>(""); // Custom date picker (YYYY-MM-DD format)
   const [startDate, setStartDate] = useState<string>(""); // Date range: start date
   const [endDate, setEndDate] = useState<string>(""); // Date range: end date
@@ -1294,9 +1294,15 @@ const paged = useMemo(() => {
     <div className="space-y-4 pb-16 md:pb-0">{/* pb for mobile FAB clearance */}
       {/* Top actions row */}
       <div className="flex items-center gap-2 justify-center md:justify-start">
-        <button onClick={() => setAddOpen(true)} className={`${brand.primary} text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2`}>
-          ➕ Add Dealer
-        </button>
+      <button 
+  onClick={() => {
+    setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
+    setAddOpen(true);
+  }} 
+  className={`${brand.primary} text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2`}
+>
+  ➕ Add Dealer
+</button>
         {canSeeReporting && (
           <button onClick={() => setRoute("reporting")} className={`px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50`}>
             Reporting
