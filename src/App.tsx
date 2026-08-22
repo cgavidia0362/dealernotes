@@ -366,7 +366,24 @@ const brand = {
   outline: "border border-blue-600 text-blue-600 hover:bg-blue-50",
   ghost: "text-slate-700 hover:bg-slate-100",
   pill: "rounded-full",
+  btnPrimary:
+    "inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500",
+  btnSecondary:
+    "inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+  btnAccent:
+    "inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white",
+  btnGhost:
+    "inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800",
+  pageTitle: "text-xl font-semibold text-slate-800",
+  pageSub: "text-sm text-slate-500",
+  th: "py-2.5 px-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500",
+  td: "py-2.5 px-3",
 };
+
+const isUserActive = (u: User) => (u.status ?? "Active") !== "Inactive";
+
+const assignableUsers = (list: User[], includeUsername?: string) =>
+  list.filter((u) => isUserActive(u) || (!!includeUsername && u.username === includeUsername));
 
 const INSIGHT_SECTIONS: { key: keyof InsightsReport; title: string; accent: string }[] = [
   { key: "snapshot", title: "Snapshot", accent: "border-l-slate-500" },
@@ -604,60 +621,71 @@ const TopBar: React.FC<{
   can: { reporting: boolean; userMgmt: boolean };
   tasksForUser: Task[];
   onClickTask: (t: Task) => void;
-}> = ({ session, route, setRoute, onLogout, can, tasksForUser, onClickTask }) => {
+}> = ({ session, route, setRoute, onLogout, tasksForUser, onClickTask }) => {
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const openTasks = tasksForUser.filter((t) => !t.completedAtISO);
+
   return (
     <header className="w-full bg-white border-b sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-blue-600 grid place-items-center text-white font-bold">DN</div>
+      <div className="max-w-7xl mx-auto px-4 py-3 md:py-0 md:h-14 flex items-center justify-between">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-9 w-9 rounded-lg bg-blue-600 grid place-items-center text-white font-bold shrink-0">DN</div>
           <div className="text-slate-800 font-semibold">Dealer Notes</div>
           {session && (
-            <nav className="ml-6 hidden md:flex items-center gap-1">
-              <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} /> 
-              <Tab
-  label="Rep Route"
-  active={route === "rep-route"}
-  onClick={() => setRoute("rep-route")}
-/>
+            <nav className="ml-4 hidden md:flex items-stretch gap-0 h-14">
+              <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+              <Tab label="Rep Route" active={route === "rep-route"} onClick={() => setRoute("rep-route")} />
               {session?.role === "Rep" && (
-  <Tab
-    label="Reports"
-    active={route === "reports"}
-    onClick={() => setRoute("reports")}
-  />
-)}
+                <Tab label="Reports" active={route === "reports"} onClick={() => setRoute("reports")} />
+              )}
               {(session?.role === "Admin" || session?.role === "Manager") && (
-  <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
-)}
-{session?.role === "Admin" && (             
-  <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} />
-)}
-{session?.role === "Admin" && (
-  <Tab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
-)}
+                <Tab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
+              )}
+              {session?.role === "Admin" && (
+                <Tab label="User Management" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+              )}
+              {session?.role === "Admin" && (
+                <Tab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
+              )}
             </nav>
           )}
         </div>
         {session ? (
-          <div className="flex items-center gap-2">
-            {/* Show ONLY incomplete tasks as chips */}
-            {tasksForUser
-              .filter((t) => !t.completedAtISO)
-              .slice(0, 3)
-              .map((t) => (
+          <div className="flex items-center gap-3">
+            {openTasks.length > 0 && (
+              <div className="relative hidden md:block">
                 <button
-                  key={t.id}
-                  onClick={() => onClickTask(t)}
-                  className="hidden sm:inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 text-red-700 rounded-full hover:bg-red-200"
-                  title="Open task dealer"
+                  type="button"
+                  className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-700 border border-red-100 hover:bg-red-100"
+                  onClick={() => setTasksOpen((o) => !o)}
                 >
-                  New Task for ({t.text})
+                  {openTasks.length} {openTasks.length === 1 ? "task" : "tasks"}
                 </button>
-              ))}
+                {tasksOpen && (
+                  <div className="absolute right-0 mt-1 w-64 rounded-lg border bg-white shadow-lg z-50 py-1">
+                    {openTasks.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                        onClick={() => {
+                          setTasksOpen(false);
+                          onClickTask(t);
+                        }}
+                      >
+                        {t.text}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="text-sm text-slate-600 hidden sm:block">
-              <span className="font-medium">{session.username}</span> • <span>{session.role}</span>
+              <span className="font-medium text-slate-800">{session.username}</span>
+              <span className="text-slate-400"> · </span>
+              <span>{session.role}</span>
             </div>
-            <button className={`hidden sm:inline-flex ${brand.outline} ${brand.pill} px-3 py-1.5`} onClick={onLogout}>
+            <button className={`hidden sm:inline-flex ${brand.btnGhost}`} onClick={onLogout} type="button">
               Log Off
             </button>
           </div>
@@ -691,12 +719,6 @@ const TopBar: React.FC<{
             {(session?.role === "Admin" || session?.role === "Manager") && (
               <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
             )}
-            {session?.role === "Admin" && (
-              <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
-            )}
-            {session?.role === "Admin" && (
-              <MobileTab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
-            )}
           </div>
         </div>
       )}
@@ -706,11 +728,16 @@ const TopBar: React.FC<{
 
 const Tab: React.FC<{ label: string; active?: boolean; onClick?: () => void; disabled?: boolean }> = ({ label, active, onClick, disabled }) => (
   <button
-    className={`px-3 py-1.5 rounded-md text-sm font-medium ${
-      disabled ? "text-slate-300 cursor-not-allowed" : active ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-100"
+    className={`px-3 h-14 text-sm font-medium border-b-2 ${
+      disabled
+        ? "text-slate-300 cursor-not-allowed border-transparent"
+        : active
+          ? "text-slate-900 border-blue-600"
+          : "text-slate-500 border-transparent hover:text-slate-800"
     }`}
     onClick={disabled ? undefined : onClick}
     disabled={disabled}
+    type="button"
   >
     {label}
   </button>
@@ -799,7 +826,7 @@ const DealerSearchView: React.FC<{
   setDealers,
   regions,
   setRegions,
-  can,
+  can: _can,
   setRoute,
   showToast,
   tasksForUser,
@@ -1157,7 +1184,8 @@ const copyHomeInsights = async () => {
 };
 
   // helpers
-  const repOptions = users.filter((u) => u.role === "Rep" || u.role === "Manager" || u.role === "Admin");
+  const rolePickerUsers = users.filter((u) => u.role === "Rep" || u.role === "Manager" || u.role === "Admin");
+  const repOptions = assignableUsers(rolePickerUsers, fRep);
 
   const stateOptions = useMemo(() => {
     const set = new Set<string>(Object.keys(regions));
@@ -1359,9 +1387,6 @@ const paged = useMemo(() => {
     }
   };  
 
-  const canSeeReporting = can.reporting && (session?.role === "Admin" || session?.role === "Manager");
-  const canSeeUserMgmt = can.userMgmt && session?.role === "Admin";
-
   // ===== Daily Summary helpers =====
   const isToday = (iso: string) => {
     const d = new Date(iso);
@@ -1560,57 +1585,45 @@ const paged = useMemo(() => {
         )}
       </div>
 
-      {/* Desktop actions */}
-      <div className="hidden md:flex items-center gap-2 justify-start">
-        <button
-          onClick={() => {
-            setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
-            setAddOpen(true);
-          }}
-          className={`${brand.primary} text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2`}
-          type="button"
-        >
-          Add Dealer
-        </button>
-        {canSeeReporting && (
-          <button
-            onClick={() => setRoute("reporting")}
-            className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
-            type="button"
-          >
-            Reporting
-          </button>
-        )}
-        {canSeeUserMgmt && (
-          <button
-            onClick={() => setRoute("user-management")}
-            className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
-            type="button"
-          >
-            User Management
-          </button>
-        )}
-        {(isRep || isAdminManager) && (
+      {/* Desktop header */}
+      <div className="hidden md:flex items-end justify-between gap-3">
+        <div>
+          <div className={brand.pageTitle}>Dealers</div>
+          <div className={brand.pageSub}>Search, filter, and open a dealer</div>
+        </div>
+        <div className="flex items-center gap-2">
           <button
             onClick={() => {
-              if (session?.role === "Admin") setSummaryRep("ALL");
-              setDailyOpen(true);
+              setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
+              setAddOpen(true);
             }}
-            className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-            title="Show notes summary"
+            className={brand.btnPrimary}
             type="button"
           >
-            Daily Summary
+            Add Dealer
           </button>
-        )}
-        <button
-          onClick={() => setScratchOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow"
-          title="Open Quick Notes"
-          type="button"
-        >
-          Quick Notes
-        </button>
+          {(isRep || isAdminManager) && (
+            <button
+              onClick={() => {
+                if (session?.role === "Admin") setSummaryRep("ALL");
+                setDailyOpen(true);
+              }}
+              className={brand.btnAccent}
+              title="Show notes summary"
+              type="button"
+            >
+              Daily Summary
+            </button>
+          )}
+          <button
+            onClick={() => setScratchOpen(true)}
+            className={brand.btnSecondary}
+            title="Open Quick Notes"
+            type="button"
+          >
+            Quick Notes
+          </button>
+        </div>
       </div>
 
       {/* Search + filters */}
@@ -1788,31 +1801,31 @@ const paged = useMemo(() => {
         <table className="min-w-[700px] md:min-w-[900px] w-full text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left">Dealer</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left">Rep</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left">Region</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left hidden md:table-cell">State</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left hidden md:table-cell">Type</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-left hidden md:table-cell">Status</th>
-              <th className="py-1.5 px-2 md:py-2 md:px-3 text-right">Last Visited</th>
+              <th className={brand.th}>Dealer</th>
+              <th className={brand.th}>Rep</th>
+              <th className={brand.th}>Region</th>
+              <th className={`${brand.th} hidden md:table-cell`}>State</th>
+              <th className={`${brand.th} hidden md:table-cell`}>Type</th>
+              <th className={`${brand.th} hidden md:table-cell`}>Status</th>
+              <th className={`${brand.th} text-right`}>Last Visited</th>
             </tr>
           </thead>
           <tbody>
             {paged.map((d) => (
               <tr
                 key={d.id}
-                className="border-t hover:bg-blue-50/40 cursor-pointer odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white"
+                className="border-t hover:bg-slate-50 cursor-pointer"
                 onClick={() => goToDealer(d.id)}
               >
-                <td className="py-1.5 px-2 md:py-2 md:px-3 font-medium text-slate-800">{d.name}</td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3">{repNameForDealer(d)}</td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3">{d.region}</td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.state}</td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.type}</td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">
+                <td className={`${brand.td} font-medium text-slate-800`}>{d.name}</td>
+                <td className={brand.td}>{repNameForDealer(d)}</td>
+                <td className={brand.td}>{d.region}</td>
+                <td className={`${brand.td} hidden md:table-cell`}>{d.state}</td>
+                <td className={`${brand.td} hidden md:table-cell`}>{d.type}</td>
+                <td className={`${brand.td} hidden md:table-cell`}>
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
                 </td>
-                <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">{d.lastVisited || "—"}</td>
+                <td className={`${brand.td} text-right`}>{d.lastVisited || "—"}</td>
               </tr>
             ))}
             {isSearching && filtered.length === 0 && (
@@ -1872,7 +1885,7 @@ const paged = useMemo(() => {
               onChange={(v) => setForm((f) => ({ ...f, assignedRepUsername: v }))}
               options={[
                 { label: "Select rep…", value: "" },
-                ...repOptions.map((r) => ({ label: `${r.name} (${r.username})`, value: r.username })),
+                ...assignableUsers(rolePickerUsers, form.assignedRepUsername).map((r) => ({ label: `${r.name} (${r.username})`, value: r.username })),
               ]}
               disabled={session?.role === "Rep"}
             />
@@ -2060,7 +2073,9 @@ const paged = useMemo(() => {
                       onChange={(e) => setSummaryRep(e.target.value)}
                     >
                       <option value="ALL">All</option>
-                      {Array.from(new Set((users || []).map((u) => u.username)))
+                      {assignableUsers(users || [], summaryRep === "ALL" ? undefined : summaryRep)
+                        .map((u) => u.username)
+                        .filter((u, i, arr) => arr.indexOf(u) === i)
                         .sort()
                         .map((u) => (
                           <option key={u} value={u}>
@@ -2890,7 +2905,7 @@ const doDeleteDealer = async () => {
 <a href="https://datatportal.vercel.app/dealer-report.html"
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm md:text-xs font-medium transition-colors"
+        className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium md:py-2"
       >
           <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
@@ -3052,7 +3067,7 @@ const doDeleteDealer = async () => {
       label="Assigned Rep"
       value={dealer.assignedRepUsername || ""}
       onChange={(v) => changeAssignedRep(v)}
-      options={[{ label: "— None —", value: "" }, ...users.filter((u) => u.role === "Rep" || u.role === "Manager").map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
+      options={[{ label: "— None —", value: "" }, ...assignableUsers(users.filter((u) => u.role === "Rep" || u.role === "Manager"), dealer.assignedRepUsername).map((r) => ({ label: `${r.name} (${r.username})`, value: r.username }))]}
     />
   </div>
 )}
@@ -3104,8 +3119,8 @@ const doDeleteDealer = async () => {
         <div className="flex items-center justify-between mb-3">
           <div className="text-slate-800 font-semibold">Add Note</div>
           {/* Quick Notes button (desktop only — mobile uses FAB) */}
-          <button className="hidden md:inline-flex px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow" onClick={() => setScratchOpen(true)}>
-            ✎ Quick Notes
+          <button className={`hidden md:inline-flex ${brand.btnSecondary}`} onClick={() => setScratchOpen(true)} type="button">
+            Quick Notes
           </button>
         </div>
         <div className="grid md:grid-cols-4 gap-3">
@@ -3639,7 +3654,7 @@ const ReportingView: React.FC<{
   notes: Note[];
   session: { username: string; role: Role } | null;
 }> = ({ dealers, users, notes, session }) => {
-  const reps = users.filter((u) => u.role === "Rep");
+  const reps = users.filter((u) => u.role === "Rep" && isUserActive(u));
   const [repFilter, setRepFilter] = useState<RepFilter>("ALL");
   const selectedRep = reps.find((r) => r.username === repFilter) || null;
 
@@ -3659,7 +3674,7 @@ const ReportingView: React.FC<{
   // Helper: pick the rep for a dealer (prefer explicit override; otherwise first covering rep)
   const getRepForDealer = (d: Dealer): User | null => {
     if (d.assignedRepUsername) {
-      const u = reps.find((r) => r.username === d.assignedRepUsername);
+      const u = users.find((r) => r.username === d.assignedRepUsername);
       if (u) return u;
     }
     return reps.find((r) => repCoversDealer(r, d)) || null;
@@ -4066,8 +4081,8 @@ const monthlyVisits = useMemo(() => {
       {/* Header + Rep selector */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div className="text-xl font-semibold text-slate-800">Reporting</div>
-          <div className="text-sm text-slate-500">Activity, coverage, and visit cadence</div>
+          <div className={brand.pageTitle}>Reporting</div>
+          <div className={brand.pageSub}>Activity, coverage, and visit cadence</div>
         </div>
         <div className="flex flex-col md:flex-row md:items-center gap-2 w-full md:w-auto">
           <div className="w-full md:w-auto">
@@ -4087,7 +4102,7 @@ const monthlyVisits = useMemo(() => {
           <button
             type="button"
             onClick={() => setDlOpen(true)}
-            className="px-3 py-2.5 md:py-2 rounded-lg bg-blue-600 text-white text-sm w-full md:w-auto"
+            className="px-3 py-2.5 rounded-lg bg-blue-600 text-white text-sm w-full md:w-auto md:py-2"
           >
             Dealer List
           </button>
@@ -4460,21 +4475,21 @@ const monthlyVisits = useMemo(() => {
           </div>
 
           <div className="hidden md:block border rounded-lg overflow-hidden">
-            <div className="grid grid-cols-12 bg-slate-50 text-slate-600 text-xs font-medium">
-              <div className="col-span-2 px-3 py-2">Region</div>
-              <div className="col-span-4 px-3 py-2">Dealer</div>
-              <div className="col-span-3 px-3 py-2">Rep</div>
-              <div className="col-span-1 px-3 py-2">State</div>
-              <div className="col-span-2 px-3 py-2">Last Visited</div>
+            <div className="grid grid-cols-12 bg-slate-50 text-slate-500 text-xs font-medium uppercase tracking-wide">
+              <div className="col-span-2 px-3 py-2.5">Region</div>
+              <div className="col-span-4 px-3 py-2.5">Dealer</div>
+              <div className="col-span-3 px-3 py-2.5">Rep</div>
+              <div className="col-span-1 px-3 py-2.5">State</div>
+              <div className="col-span-2 px-3 py-2.5">Last Visited</div>
             </div>
             <div className="max-h-96 overflow-auto divide-y">
               {dealerListRows.map((r, idx) => (
-                <div key={idx} className="grid grid-cols-12 text-sm">
-                  <div className="col-span-2 px-3 py-2">{r.region || "—"}</div>
-                  <div className="col-span-4 px-3 py-2">{r.dealer || "—"}</div>
-                  <div className="col-span-3 px-3 py-2">{r.rep || "—"}</div>
-                  <div className="col-span-1 px-3 py-2">{r.state || "—"}</div>
-                  <div className="col-span-2 px-3 py-2">
+                <div key={idx} className="grid grid-cols-12 text-sm hover:bg-slate-50">
+                  <div className="col-span-2 px-3 py-2.5">{r.region || "—"}</div>
+                  <div className="col-span-4 px-3 py-2.5">{r.dealer || "—"}</div>
+                  <div className="col-span-3 px-3 py-2.5">{r.rep || "—"}</div>
+                  <div className="col-span-1 px-3 py-2.5">{r.state || "—"}</div>
+                  <div className="col-span-2 px-3 py-2.5">
                     {r.lastVisited ? new Date(r.lastVisited).toLocaleDateString() : "—"}
                   </div>
                 </div>
@@ -5408,7 +5423,7 @@ const confirmImportDealers = async () => {
       {/* Users */}
       <Card title="Users">
         <div className="mb-3">
-          <button className={`${brand.primary} text-white px-3 py-2.5 md:py-2 rounded-lg w-full md:w-auto`} onClick={openAddUser} type="button">
+          <button className={`${brand.primary} text-white px-3 py-2.5 rounded-lg w-full md:w-auto md:px-3 md:py-2 md:text-sm`} onClick={openAddUser} type="button">
             Add User
           </button>
         </div>
@@ -5449,30 +5464,30 @@ const confirmImportDealers = async () => {
 
         <div className="hidden md:block overflow-auto rounded-lg border bg-white">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
+            <thead className="bg-slate-50">
               <tr>
-                <th className="text-left py-2 px-3 font-medium">Name</th>
-                <th className="text-left py-2 px-3 font-medium">Username</th>
-                <th className="text-left py-2 px-3 font-medium">Phone</th>
-                <th className="text-left py-2 px-3 font-medium">Role</th>
-                <th className="text-left py-2 px-3 font-medium">States</th>
-                <th className="text-left py-2 px-3 font-medium">Regions by State</th>
-                <th className="text-left py-2 px-3 font-medium">Status</th>
-                <th className="text-right py-2 px-3 font-medium">Actions</th>
+                <th className={brand.th}>Name</th>
+                <th className={brand.th}>Username</th>
+                <th className={brand.th}>Phone</th>
+                <th className={brand.th}>Role</th>
+                <th className={brand.th}>States</th>
+                <th className={brand.th}>Regions by State</th>
+                <th className={brand.th}>Status</th>
+                <th className={`${brand.th} text-right`}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} className="border-t odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white">
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.name?.trim() || u.username}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.username}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.phone || "—"}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.role}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{u.states.join(", ") || "—"}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">
+                <tr key={u.id} className="border-t hover:bg-slate-50">
+                  <td className={brand.td}>{u.name?.trim() || u.username}</td>
+                  <td className={brand.td}>{u.username}</td>
+                  <td className={brand.td}>{u.phone || "—"}</td>
+                  <td className={brand.td}>{u.role}</td>
+                  <td className={brand.td}>{u.states.join(", ") || "—"}</td>
+                  <td className={brand.td}>
                     {u.states.length === 0 ? "—" : u.states.map((st) => `${st}: ${(u.regionsByState[st] || []).length}`).join("  •  ")}
                   </td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">
+                  <td className={brand.td}>
                     <span
                       className={`px-2 py-1 rounded-full text-xs font-medium ${
                         getStatus(u) === "Active" ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-700"
@@ -5481,13 +5496,14 @@ const confirmImportDealers = async () => {
                       {getStatus(u)}
                     </span>
                   </td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">
-                    <button className="px-2 py-1 rounded border text-slate-700 hover:bg-slate-50 mr-2" onClick={() => openEditUser(u)}>
+                  <td className={`${brand.td} text-right`}>
+                    <button className={`${brand.btnSecondary} mr-2`} onClick={() => openEditUser(u)} type="button">
                       Edit
                     </button>
                     <button
-                      className="px-2 py-1 rounded border border-red-600 text-red-700 hover:bg-red-50"
-                      onClick={() => setConfirmRemove(u)} // NEW confirm
+                      className="inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-700 hover:bg-red-50"
+                      onClick={() => setConfirmRemove(u)}
+                      type="button"
                     >
                       Remove
                     </button>
@@ -5515,7 +5531,7 @@ const confirmImportDealers = async () => {
 
             {/* NEW: desktop button above the search bar */}
             <div className="hidden md:block sm:col-span-2">
-              <button className="px-3 py-1.5 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={createRegion}>
+              <button className={brand.btnSecondary} onClick={createRegion} type="button">
                 Add / Create
               </button>
             </div>
@@ -5617,33 +5633,35 @@ const confirmImportDealers = async () => {
 
   <div className="hidden md:block overflow-auto rounded-lg border bg-white">
     <table className="w-full text-sm">
-      <thead className="bg-slate-50 text-slate-600">
+      <thead className="bg-slate-50">
         <tr>
-          <th className="text-left py-2 px-3 font-medium">State</th>
-          <th className="text-left py-2 px-3 font-medium">Region</th>
-          <th className="text-right py-2 px-3 font-medium">Dealers</th>
-          <th className="text-right py-2 px-3 font-medium">Actions</th>
+          <th className={brand.th}>State</th>
+          <th className={brand.th}>Region</th>
+          <th className={`${brand.th} text-right`}>Dealers</th>
+          <th className={`${brand.th} text-right`}>Actions</th>
         </tr>
       </thead>
       <tbody>
         {regionPageRows.map((r) => (
           <tr
             key={`${r.state}-${r.region}`}
-            className="border-t odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white"
+            className="border-t hover:bg-slate-50"
           >
-            <td className="py-1.5 px-2 md:py-2 md:px-3">{r.state}</td>
-            <td className="py-1.5 px-2 md:py-2 md:px-3">{r.region}</td>
-            <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">{r.count}</td>
-            <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">
+            <td className={brand.td}>{r.state}</td>
+            <td className={brand.td}>{r.region}</td>
+            <td className={`${brand.td} text-right`}>{r.count}</td>
+            <td className={`${brand.td} text-right`}>
               <button
-                className="px-2 py-1 rounded border text-slate-700 hover:bg-slate-50 mr-2"
+                className={`${brand.btnSecondary} mr-2`}
                 onClick={() => setRegionModal({ state: r.state, region: r.region })}
+                type="button"
               >
                 View
               </button>
               <button
-                className="px-2 py-1 rounded border border-red-600 text-red-700 hover:bg-red-50"
+                className="inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-700 hover:bg-red-50"
                 onClick={() => deleteRegion(r.state, r.region)}
+                type="button"
               >
                 Delete
               </button>
@@ -7945,7 +7963,7 @@ const exportDailySummaryCSV = () => {
       <div className="space-y-3">
         <div>
           <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
+          <h1 className="text-2xl md:text-xl font-bold md:font-semibold text-slate-800">Rep Route</h1>
         </div>
 
         {/* Mobile toolbar */}
@@ -8017,25 +8035,40 @@ const exportDailySummaryCSV = () => {
         </div>
 
         {/* Desktop toolbar */}
-        <div className="hidden md:flex md:flex-row md:items-center md:justify-between gap-3">
-          <button
-            onClick={() => setDailyOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-            title="Show notes summary"
-            type="button"
-          >
-            Daily Summary
-          </button>
+        <div className="hidden md:block space-y-3">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Date</label>
+              <input
+                type="date"
+                value={dateStr}
+                onChange={(e) => setDateStr(e.target.value)}
+                className="border rounded-lg px-3 py-2 text-sm"
+                title="Pick a day"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setDailyOpen(true)}
+                className={brand.btnAccent}
+                title="Show notes summary"
+                type="button"
+              >
+                Daily Summary
+              </button>
+              <a
+                href={allStopsMapUrl()}
+                target="_blank"
+                rel="noreferrer"
+                className={`${brand.btnPrimary} ${sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
+              >
+                Open in Maps
+              </a>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="date"
-              value={dateStr}
-              onChange={(e) => setDateStr(e.target.value)}
-              className="border rounded-lg px-3 py-2"
-              title="Pick a day"
-            />
             <button
-              className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium"
+              className={brand.btnSecondary}
               onClick={() => {
                 setSaveModalOpen(true);
                 setPresetName("");
@@ -8046,7 +8079,7 @@ const exportDailySummaryCSV = () => {
               Save Preset
             </button>
             <button
-              className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2 text-sm font-medium"
+              className={brand.btnSecondary}
               onClick={() => {
                 setLoadModalOpen(true);
                 setSelectedPresetId("");
@@ -8057,30 +8090,22 @@ const exportDailySummaryCSV = () => {
               Load Preset
             </button>
             <button
-              className="px-3 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium"
+              className={brand.btnSecondary}
               onClick={() => setManageModalOpen(true)}
               title="Manage presets"
               type="button"
             >
               Manage
             </button>
-            <button className="px-3 py-2 rounded-lg border" onClick={clearDay} type="button">
+            <button className={brand.btnGhost} onClick={clearDay} type="button">
               Clear Day
             </button>
-            <button className="px-3 py-2 rounded-lg border" onClick={exportCSV} type="button">
+            <button className={brand.btnGhost} onClick={exportCSV} type="button">
               Export CSV
             </button>
-            <button className="px-3 py-2 rounded-lg border" onClick={copyAll} type="button">
+            <button className={brand.btnGhost} onClick={copyAll} type="button">
               Copy All
             </button>
-            <a
-              href={allStopsMapUrl()}
-              target="_blank"
-              rel="noreferrer"
-              className={`px-3 py-2 rounded-lg border ${sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
-            >
-              Open Route in Maps
-            </a>
           </div>
         </div>
       </div>
@@ -8095,7 +8120,7 @@ const exportDailySummaryCSV = () => {
       </span>
       {filtered.length > 0 && (
         <button
-          className="text-sm px-3 py-2.5 md:py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto"
+          className="text-sm px-3 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto md:py-2"
           onClick={addAllFiltered}
           type="button"
         >
@@ -8726,7 +8751,10 @@ const DealerMasterListView: React.FC<{
   const [importing, setImporting] = useState(false);
 
   const stateOptions = useMemo(() => Array.from(new Set(dealers.map(d => d.state))).sort(), [dealers]);
-  const allUsers = useMemo(() => users.filter(u => u.status !== "Inactive"), [users]);
+  const allUsers = useMemo(
+    () => assignableUsers(users, editDraft.assignedRepUsername),
+    [users, editDraft.assignedRepUsername]
+  );
 
   const filtered = useMemo(() => {
     const sq = q.trim().toLowerCase();
@@ -9047,8 +9075,8 @@ const DealerMasterListView: React.FC<{
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div className="text-xl font-semibold text-slate-800">Dealer Master List</div>
-          <div className="text-sm text-slate-500">{filtered.length.toLocaleString()} of {dealers.length.toLocaleString()} dealers</div>
+          <div className={brand.pageTitle}>Dealer Master List</div>
+          <div className={brand.pageSub}>{filtered.length.toLocaleString()} of {dealers.length.toLocaleString()} dealers</div>
         </div>
         <div className="grid grid-cols-2 gap-2 w-full md:flex md:w-auto md:items-center">
           <input
@@ -9059,14 +9087,14 @@ const DealerMasterListView: React.FC<{
             onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.currentTarget.value = ""; }}
           />
           <button
-            className="px-3 py-2.5 md:py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium"
+            className="px-3 py-2.5 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium md:border-slate-300 md:text-slate-700 md:hover:bg-slate-50 md:py-2"
             onClick={() => fileInputRef.current?.click()}
             type="button"
           >
             Upload CSV
           </button>
           <button
-            className="px-3 py-2.5 md:py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
+            className="px-3 py-2.5 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium md:border-slate-300 md:text-slate-700 md:hover:bg-slate-50 md:py-2"
             onClick={exportCSV}
             type="button"
           >
@@ -9164,19 +9192,19 @@ const DealerMasterListView: React.FC<{
       {/* Table */}
       <div className="hidden md:block rounded-xl border bg-white shadow-sm overflow-x-auto">
         <table className="w-full text-sm" style={{ minWidth: "1100px" }}>
-          <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+          <thead className="bg-slate-50">
             <tr>
-              <th className="py-2 px-3 text-left">DN ID</th>
-              <th className="py-2 px-3 text-left">CIF #</th>
-              <th className="py-2 px-3 text-left">Dealer Name</th>
-              <th className="py-2 px-3 text-left">Rep</th>
-              <th className="py-2 px-3 text-left">State</th>
-              <th className="py-2 px-3 text-left">Region</th>
-              <th className="py-2 px-3 text-left">Type</th>
-              <th className="py-2 px-3 text-left">Status</th>
-              <th className="py-2 px-3 text-left">Address</th>
-              <th className="py-2 px-3 text-left">City</th>
-              <th className="py-2 px-3 text-left">Actions</th>
+              <th className={brand.th}>DN ID</th>
+              <th className={brand.th}>CIF #</th>
+              <th className={brand.th}>Dealer Name</th>
+              <th className={brand.th}>Rep</th>
+              <th className={brand.th}>State</th>
+              <th className={brand.th}>Region</th>
+              <th className={brand.th}>Type</th>
+              <th className={brand.th}>Status</th>
+              <th className={brand.th}>Address</th>
+              <th className={brand.th}>City</th>
+              <th className={brand.th}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -9228,10 +9256,10 @@ const DealerMasterListView: React.FC<{
                     <td className="py-2 px-3">
                       <input className="w-28 rounded border px-2 py-1 text-xs" value={editDraft.city} onChange={e => setEditDraft((p: any) => ({ ...p, city: e.target.value }))} />
                     </td>
-                    <td className="py-2 px-3">
+                    <td className={brand.td}>
                       <div className="flex items-center gap-2">
-                        <button className="text-xs text-green-700 hover:underline font-medium" onClick={() => saveEdit(d.id)}>Save</button>
-                        <button className="text-xs text-slate-500 hover:underline" onClick={() => setEditingId(null)}>Cancel</button>
+                        <button className={brand.btnPrimary} onClick={() => saveEdit(d.id)} type="button">Save</button>
+                        <button className={brand.btnGhost} onClick={() => setEditingId(null)} type="button">Cancel</button>
                       </div>
                     </td>
                   </tr>
@@ -9240,20 +9268,20 @@ const DealerMasterListView: React.FC<{
 
               return (
                 <tr key={d.id} className="border-t hover:bg-slate-50">
-                  <td className="py-2 px-3 text-xs text-slate-400 font-mono">{shortId(d.id)}</td>
-                  <td className="py-2 px-3 text-slate-600">{(d as any).cifNumber || <span className="text-slate-300">—</span>}</td>
-                  <td className="py-2 px-3 font-medium text-slate-800">{d.name}</td>
-                  <td className="py-2 px-3 text-slate-600">{repName}</td>
-                  <td className="py-2 px-3">{d.state}</td>
-                  <td className="py-2 px-3">{d.region}</td>
-                  <td className="py-2 px-3">{d.type}</td>
-                  <td className="py-2 px-3">
+                  <td className={`${brand.td} text-xs text-slate-400 font-mono`}>{shortId(d.id)}</td>
+                  <td className={`${brand.td} text-slate-600`}>{(d as any).cifNumber || <span className="text-slate-300">—</span>}</td>
+                  <td className={`${brand.td} font-medium text-slate-800`}>{d.name}</td>
+                  <td className={`${brand.td} text-slate-600`}>{repName}</td>
+                  <td className={brand.td}>{d.state}</td>
+                  <td className={brand.td}>{d.region}</td>
+                  <td className={brand.td}>{d.type}</td>
+                  <td className={brand.td}>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
                   </td>
-                  <td className="py-2 px-3 text-slate-600">{d.address1 || "—"}</td>
-                  <td className="py-2 px-3 text-slate-600">{d.city || "—"}</td>
-                  <td className="py-2 px-3">
-                    <button className="text-xs text-blue-700 hover:underline" onClick={() => startEdit(d)}>Edit</button>
+                  <td className={`${brand.td} text-slate-600`}>{d.address1 || "—"}</td>
+                  <td className={`${brand.td} text-slate-600`}>{d.city || "—"}</td>
+                  <td className={brand.td}>
+                    <button className={brand.btnSecondary} onClick={() => startEdit(d)} type="button">Edit</button>
                   </td>
                 </tr>
               );
