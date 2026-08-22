@@ -107,6 +107,18 @@ type Note = {
   failed?: boolean;           // true if last save failed
 };
 
+type InsightsReport = {
+  snapshot: string[];
+  themes: string[];
+  positive: string[];
+  concerns: string[];
+  competitiveLosses: string[];
+  programReception: string[];
+  eContracting: string[];
+  newProgram: string[];
+  watchItems: string[];
+};
+
 type Task = {
   id: string;
   dealerId: string;
@@ -355,6 +367,40 @@ const brand = {
   ghost: "text-slate-700 hover:bg-slate-100",
   pill: "rounded-full",
 };
+
+const INSIGHT_SECTIONS: { key: keyof InsightsReport; title: string }[] = [
+  { key: "snapshot", title: "Snapshot" },
+  { key: "themes", title: "What dealers are talking about" },
+  { key: "positive", title: "Positive" },
+  { key: "concerns", title: "Concerns" },
+  { key: "competitiveLosses", title: "Competitive losses" },
+  { key: "programReception", title: "Program reception" },
+  { key: "eContracting", title: "eContracting" },
+  { key: "newProgram", title: "New program" },
+  { key: "watchItems", title: "Watch items" },
+];
+
+function formatInsightsPlainText(
+  report: InsightsReport,
+  rangeLabel: string,
+  noteCount: number,
+  truncated: boolean
+) {
+  const lines = [
+    `Market Insights — ${rangeLabel} (all reps)`,
+    truncated
+      ? `${noteCount} most recent notes analyzed (range was capped)`
+      : `${noteCount} notes`,
+    "",
+  ];
+  for (const s of INSIGHT_SECTIONS) {
+    lines.push(s.title);
+    const items = report[s.key] || [];
+    for (const item of items) lines.push(`• ${item}`);
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
 
 /* ------------------------------- UI Shell --------------------------------- */
 // Enhanced login: supports demo creds OR user passwords saved via invite/reset.
@@ -779,6 +825,12 @@ const DealerSearchView: React.FC<{
 const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
 const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
 const [homeRangeLabel, setHomeRangeLabel] = useState<string>("");
+const [homeRangeStartISO, setHomeRangeStartISO] = useState<string>("");
+const [homeRangeEndISO, setHomeRangeEndISO] = useState<string>("");
+const [insights, setInsights] = useState<InsightsReport | null>(null);
+const [insightsMeta, setInsightsMeta] = useState<{ noteCount: number; truncated: boolean } | null>(null);
+const [loadingInsights, setLoadingInsights] = useState(false);
+const [insightsError, setInsightsError] = useState<string>("");
 // Fetch Daily Summary notes from Supabase whenever the modal opens or filters change
 useEffect(() => {
   if (!dailyOpen) return;
@@ -867,6 +919,8 @@ useEffect(() => {
 
   const startISO = start.toISOString();
   const endISO = endExclusive.toISOString();
+  setHomeRangeStartISO(startISO);
+  setHomeRangeEndISO(endISO);
 
   // Build query
   setLoadingHomeSummary(true);
@@ -903,6 +957,12 @@ useEffect(() => {
     setLoadingHomeSummary(false);
   })();
 }, [dailyOpen, summaryRange, summaryRep, customDate, startDate, endDate, isRep, isAdminManager, session?.username]);
+
+useEffect(() => {
+  setInsights(null);
+  setInsightsMeta(null);
+  setInsightsError("");
+}, [summaryRange, customDate, startDate, endDate]);
 
 // Fetch missing dealers for Daily Summary notes (handles renamed dealers)
 useEffect(() => {
@@ -980,6 +1040,67 @@ const exportHomeDailySummaryCSV = () => {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+};
+
+const generateHomeInsights = async () => {
+  if (session?.role !== "Admin") return;
+  if (!homeRangeStartISO || !homeRangeEndISO) {
+    showToast("Pick a date range first.", "error");
+    return;
+  }
+  setLoadingInsights(true);
+  setInsightsError("");
+  try {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) {
+      showToast("Please log in again.", "error");
+      return;
+    }
+    const resp = await fetch("/api/ai-insights", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        startISO: homeRangeStartISO,
+        endISO: homeRangeEndISO,
+        rangeLabel: homeRangeLabel,
+      }),
+    });
+    const json = await resp.json().catch(() => ({} as any));
+    if (!resp.ok) {
+      const msg = json?.error || "Insights failed.";
+      setInsightsError(msg);
+      showToast(msg, "error");
+      return;
+    }
+    if (!json.report || !json.noteCount) {
+      setInsights(null);
+      setInsightsMeta({ noteCount: 0, truncated: false });
+      const msg = json?.message || "No notes in selected range.";
+      setInsightsError(msg);
+      showToast(msg, "error");
+      return;
+    }
+    setInsights(json.report as InsightsReport);
+    setInsightsMeta({ noteCount: Number(json.noteCount) || 0, truncated: !!json.truncated });
+  } catch (e: any) {
+    const msg = e?.message || "Insights failed.";
+    setInsightsError(msg);
+    showToast(msg, "error");
+  } finally {
+    setLoadingInsights(false);
+  }
+};
+
+const copyHomeInsights = async () => {
+  if (!insights || !insightsMeta) return;
+  await navigator.clipboard.writeText(
+    formatInsightsPlainText(insights, homeRangeLabel, insightsMeta.noteCount, insightsMeta.truncated)
+  );
+  showToast("Insights copied.", "success");
 };
 
   // helpers
@@ -1793,11 +1914,22 @@ const paged = useMemo(() => {
   )}
 
   {/* Buttons + "Showing" label (right side) */}
-  <div className="ml-auto flex items-center gap-2">
+  <div className="ml-auto flex items-center gap-2 flex-wrap">
     <div className="text-xs text-slate-500">
       Showing: {homeRangeLabel}
       {(session?.role === 'Admin' || session?.role === 'Manager') && summaryRep !== 'ALL' ? ` • ${summaryRep}` : ''}
     </div>
+    {session?.role === 'Admin' && (
+      <button
+        className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60"
+        onClick={generateHomeInsights}
+        disabled={loadingInsights}
+        title="Analyzes all reps in this date range. Runs only when you click."
+        type="button"
+      >
+        {loadingInsights ? "Generating…" : "Generate Insights"}
+      </button>
+    )}
     <button
       className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
       onClick={copyHomeDailySummary}
@@ -1812,6 +1944,54 @@ const paged = useMemo(() => {
     </button>
   </div>
 </div>
+
+{session?.role === 'Admin' && (insights || loadingInsights || insightsError) && (
+  <div className="border rounded-xl p-4 bg-slate-50 mb-4">
+    <div className="flex items-start justify-between gap-3 mb-2">
+      <div>
+        <div className="text-sm font-semibold text-slate-800">Market Insights</div>
+        <div className="text-xs text-slate-500">
+          {homeRangeLabel} • all reps
+          {insightsMeta ? ` • ${insightsMeta.noteCount} notes` : ''}
+        </div>
+      </div>
+      {insights && (
+        <button
+          className="px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm"
+          onClick={copyHomeInsights}
+          type="button"
+        >
+          Copy insights
+        </button>
+      )}
+    </div>
+    {loadingInsights && (
+      <div className="text-sm text-slate-500">Reading notes and generating the report…</div>
+    )}
+    {!loadingInsights && insightsError && !insights && (
+      <div className="text-sm text-slate-600">{insightsError}</div>
+    )}
+    {!loadingInsights && insightsMeta?.truncated && (
+      <div className="text-xs text-amber-700 mb-2">
+        Range was large — analyzed the most recent {insightsMeta.noteCount} notes.
+      </div>
+    )}
+    {!loadingInsights && insights && (
+      <div className="space-y-3">
+        {INSIGHT_SECTIONS.map((s) => (
+          <div key={s.key}>
+            <div className="text-sm font-semibold text-slate-800">{s.title}</div>
+            <ul className="mt-1 list-disc pl-5 space-y-1">
+              {(insights[s.key] || []).map((item, i) => (
+                <li key={i} className="text-sm text-slate-700">{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+)}
 
 {/* List */}
 <div className="space-y-3">
