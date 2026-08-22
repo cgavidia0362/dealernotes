@@ -668,32 +668,35 @@ const TopBar: React.FC<{
 
       {session && (
         <div className="md:hidden border-t">
-          <div className="flex">
-            <MobileTab label="Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
-            <MobileTab
-  label="Route"
-  active={route === "rep-route"}
-  onClick={() => setRoute("rep-route")}
-/>
-            {session?.role === "Rep" && (
-  <MobileTab
-    label="Reports"
-    active={route === "reports"}
-    onClick={() => setRoute("reports")}
-  />
-)}
-           {(session?.role === "Admin" || session?.role === "Manager") && (
-  <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
-)}
-           {session?.role === "Admin" && (
-  <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
-)}
-{session?.role === "Admin" && (
-  <MobileTab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
-)}
-            <button className="ml-auto px-3 py-2 text-sm text-blue-600" onClick={onLogout}>
+          <div className="flex items-center justify-between gap-2 px-3 pt-2">
+            <div className="text-xs text-slate-500 truncate min-w-0">
+              <span className="font-medium text-slate-700">{session.username}</span>
+              {" · "}
+              {session.role}
+            </div>
+            <button
+              className="shrink-0 px-3 py-2 text-sm font-medium text-blue-600"
+              onClick={onLogout}
+              type="button"
+            >
               Log Off
             </button>
+          </div>
+          <div className="flex flex-wrap gap-1 px-2 pb-2">
+            <MobileTab label="Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+            <MobileTab label="Route" active={route === "rep-route"} onClick={() => setRoute("rep-route")} />
+            {session?.role === "Rep" && (
+              <MobileTab label="Reports" active={route === "reports"} onClick={() => setRoute("reports")} />
+            )}
+            {(session?.role === "Admin" || session?.role === "Manager") && (
+              <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
+            )}
+            {session?.role === "Admin" && (
+              <MobileTab label="Users" active={route === "user-management"} onClick={() => setRoute("user-management")} />
+            )}
+            {session?.role === "Admin" && (
+              <MobileTab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
+            )}
           </div>
         </div>
       )}
@@ -715,9 +718,12 @@ const Tab: React.FC<{ label: string; active?: boolean; onClick?: () => void; dis
 
 const MobileTab: React.FC<{ label: string; active?: boolean; onClick?: () => void; disabled?: boolean }> = ({ label, active, onClick, disabled }) => (
   <button
-    className={`flex-1 py-2 text-sm ${disabled ? "text-slate-300" : active ? "text-blue-700 border-b-2 border-blue-600" : "text-slate-600"}`}
+    className={`min-w-[30%] flex-1 py-2.5 px-2 text-sm font-medium rounded-lg ${
+      disabled ? "text-slate-300" : active ? "bg-blue-50 text-blue-700" : "text-slate-600"
+    }`}
     onClick={disabled ? undefined : onClick}
     disabled={disabled}
+    type="button"
   >
     {label}
   </button>
@@ -809,6 +815,9 @@ const DealerSearchView: React.FC<{
   const [fRegion, setFRegion] = useState<string>(savedFilters.fRegion || "");
   const [fType, setFType] = useState<string>(savedFilters.fType || "");
   const [fStatus, setFStatus] = useState<string>(savedFilters.fStatus || "");
+  const [filtersOpen, setFiltersOpen] = useState(() =>
+    Boolean(savedFilters.fRep || savedFilters.fState || savedFilters.fRegion || savedFilters.fType || savedFilters.fStatus)
+  );
 
   // Save filters to localStorage whenever they change
   useEffect(() => {
@@ -819,6 +828,7 @@ const DealerSearchView: React.FC<{
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
   const isSearching = Boolean(q || fRep || fState || fRegion || fType || fStatus);
+  const activeFilterCount = [fRep, fState, fRegion, fType, fStatus].filter(Boolean).length;
   
   // reset to page 1 whenever search/filters change
   useEffect(() => {
@@ -844,7 +854,9 @@ const DealerSearchView: React.FC<{
 
   const [dailyOpen, setDailyOpen] = useState(false);
   const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today");
-  const [summaryRep, setSummaryRep] = useState<string>(session?.username || "ALL");
+  const [summaryRep, setSummaryRep] = useState<string>(
+    session?.role === "Admin" ? "ALL" : (session?.username || "ALL")
+  );
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
   const [summaryTab, setSummaryTab] = useState<"insights" | "notes">("notes");
@@ -992,6 +1004,11 @@ useEffect(() => {
     setLoadingHomeSummary(false);
   })();
 }, [dailyOpen, summaryRange, summaryRep, startDate, endDate, isRep, isAdminManager, session?.username]);
+
+useEffect(() => {
+  if (!dailyOpen) return;
+  if (session?.role === "Admin") setSummaryRep("ALL");
+}, [dailyOpen, session?.role]);
 
 useEffect(() => {
   setInsights(null);
@@ -1374,6 +1391,7 @@ const paged = useMemo(() => {
   const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
   const dealerById = (id: string) => dealers.find((d) => d.id === id);
   const isAdmin = session?.role === "Admin";
+  const showInsightsSplit = isAdmin && (loadingInsights || !!insights || !!insightsError);
   const summaryNoteCards = (
     <div className="space-y-3 min-w-0">
       {loadingHomeSummary && <div className="text-sm text-slate-500">Loading…</div>}
@@ -1514,176 +1532,212 @@ const paged = useMemo(() => {
   };
 
   return (
-    <div className="space-y-4 pb-16 md:pb-0">{/* pb for mobile FAB clearance */}
-      {/* Top actions row */}
-      <div className="flex items-center gap-2 justify-center md:justify-start">
-      <button 
-  onClick={() => {
-    setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
-    setAddOpen(true);
-  }} 
-  className={`${brand.primary} text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2`}
->
-  ➕ Add Dealer
-</button>
+    <div className="space-y-4 pb-24 md:pb-0">{/* pb for mobile FAB clearance */}
+      {/* Mobile actions */}
+      <div className="grid grid-cols-2 gap-2 md:hidden">
+        <button
+          onClick={() => {
+            setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
+            setAddOpen(true);
+          }}
+          className={`${brand.primary} text-white px-3 py-2.5 rounded-lg text-sm font-medium`}
+          type="button"
+        >
+          Add Dealer
+        </button>
+        {(isRep || isAdminManager) && (
+          <button
+            onClick={() => {
+              if (session?.role === "Admin") setSummaryRep("ALL");
+              setDailyOpen(true);
+            }}
+            className="px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium"
+            title="Show notes summary"
+            type="button"
+          >
+            Daily Summary
+          </button>
+        )}
+      </div>
+
+      {/* Desktop actions */}
+      <div className="hidden md:flex items-center gap-2 justify-start">
+        <button
+          onClick={() => {
+            setForm((f) => ({ ...f, assignedRepUsername: session?.username || "" }));
+            setAddOpen(true);
+          }}
+          className={`${brand.primary} text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2`}
+          type="button"
+        >
+          Add Dealer
+        </button>
         {canSeeReporting && (
-          <button onClick={() => setRoute("reporting")} className={`px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50`}>
+          <button
+            onClick={() => setRoute("reporting")}
+            className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+            type="button"
+          >
             Reporting
           </button>
         )}
         {canSeeUserMgmt && (
-          <button onClick={() => setRoute("user-management")} className={`px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50`}>
+          <button
+            onClick={() => setRoute("user-management")}
+            className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+            type="button"
+          >
             User Management
           </button>
         )}
-
-        {/* Daily Summary — now for Rep + Admin/Manager with range & rep controls */}
         {(isRep || isAdminManager) && (
           <button
-            onClick={() => setDailyOpen(true)}
+            onClick={() => {
+              if (session?.role === "Admin") setSummaryRep("ALL");
+              setDailyOpen(true);
+            }}
             className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
             title="Show notes summary"
+            type="button"
           >
-            📄 Daily Summary
+            Daily Summary
           </button>
         )}
-
-        {/* Unified Quick Notes button — hidden on mobile, keep on desktop */}
         <button
           onClick={() => setScratchOpen(true)}
-          className={`hidden md:inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow`}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow"
           title="Open Quick Notes"
+          type="button"
         >
-          ✎ Quick Notes
+          Quick Notes
         </button>
       </div>
 
-{/* Filters (note: override-only removed) */}
-<div className="rounded-xl border bg-white p-4 shadow-sm relative">
-  {/* Desktop search (above filters) */}
-<div className="hidden md:block mb-3">
-  <div className="relative">
-    <input
-      className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-      placeholder="Search dealers, city, state, region…"
-      value={q}
-      onChange={(e) => setQ(e.target.value)}
-    />
-  </div>
-</div>
-<div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-    {/* Search with mobile typeahead container */}
-    <div className="md:col-span-2 relative md:hidden">
-      <input
-        className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-        placeholder="Search dealers, city, state, region…"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
-      {/* Mobile suggestions dropdown */}
-      {q.trim().length > 0 && suggestions.length > 0 && (
-        <div className="md:hidden absolute left-0 right-0 mt-1 z-20 rounded-xl border bg-white shadow max-h-64 overflow-y-auto">
-          {suggestions.map((d) => (
-            <button
-              key={d.id}
-              className="w-full text-left px-3 py-2 hover:bg-blue-50"
-              onClick={() => goToDealer(d.id)}
-            >
-              <div className="font-medium text-slate-800">{d.name}</div>
-              <div className="text-xs text-slate-500">
-                {d.region}, {d.state}
-              </div>
-            </button>
-          ))}
+      {/* Search + filters */}
+      <div className="rounded-xl border bg-white p-4 shadow-sm relative">
+        <div className="hidden md:block mb-3">
+          <input
+            className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Search dealers, city, state, region…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
         </div>
-      )}
-    </div>
 
-    {/* Rep filter - hidden for Reps, only shown for Managers/Admins */}
-    {!isRep && (
-      <SelectField
-        label="Rep"
-        value={fRep}
-        onChange={(v) => setFRep(v)}
-        options={[
-          { label: "All", value: "" },
-          ...repOptions.map((r) => ({
-            label: `${r.name} (${r.username})`,
-            value: r.username,
-          })),
-        ]}
-      />
-    )}
+        <div className="relative md:hidden mb-3">
+          <input
+            className="w-full rounded-lg border px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Search dealers, city, state, region…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {q.trim().length > 0 && suggestions.length > 0 && (
+            <div className="absolute left-0 right-0 mt-1 z-20 rounded-xl border bg-white shadow max-h-64 overflow-y-auto">
+              {suggestions.map((d) => (
+                <button
+                  key={d.id}
+                  className="w-full text-left px-3 py-2.5 hover:bg-blue-50"
+                  onClick={() => goToDealer(d.id)}
+                  type="button"
+                >
+                  <div className="font-medium text-slate-800">{d.name}</div>
+                  <div className="text-xs text-slate-500">
+                    {d.region}, {d.state}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
-    {/* State filter */}
-    <SelectField
-      label="State"
-      value={fState}
-      onChange={(v) => {
-        setFState(v);
-        if (v && !(regions[v] || []).includes(fRegion)) setFRegion("");
-      }}
-      options={[
-        { label: "All", value: "" },
-        ...stateOptions.map((st) => ({ label: st, value: st })),
-      ]}
-    />
+        <button
+          type="button"
+          className="md:hidden w-full flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm font-medium text-slate-700"
+          onClick={() => setFiltersOpen((o) => !o)}
+        >
+          <span>{activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters"}</span>
+          <span className="text-slate-400">{filtersOpen ? "Hide" : "Show"}</span>
+        </button>
 
-    {/* Region filter */}
-    <SelectField
-      label="Region"
-      value={fRegion}
-      onChange={(v) => setFRegion(v)}
-      options={[
-        { label: "All", value: "" },
-        ...(fState
-          ? (regions[fState] || []).map((rg) => ({ label: rg, value: rg }))
-          : allRegions.map((rg) => ({ label: rg, value: rg }))),
-      ]}
-    />
+        <div className={`${filtersOpen ? "grid mt-3" : "hidden"} md:grid md:mt-0 grid-cols-1 md:grid-cols-5 gap-3`}>
+          {!isRep && (
+            <SelectField
+              label="Rep"
+              value={fRep}
+              onChange={(v) => setFRep(v)}
+              options={[
+                { label: "All", value: "" },
+                ...repOptions.map((r) => ({
+                  label: `${r.name} (${r.username})`,
+                  value: r.username,
+                })),
+              ]}
+            />
+          )}
+          <SelectField
+            label="State"
+            value={fState}
+            onChange={(v) => {
+              setFState(v);
+              if (v && !(regions[v] || []).includes(fRegion)) setFRegion("");
+            }}
+            options={[
+              { label: "All", value: "" },
+              ...stateOptions.map((st) => ({ label: st, value: st })),
+            ]}
+          />
+          <SelectField
+            label="Region"
+            value={fRegion}
+            onChange={(v) => setFRegion(v)}
+            options={[
+              { label: "All", value: "" },
+              ...(fState
+                ? (regions[fState] || []).map((rg) => ({ label: rg, value: rg }))
+                : allRegions.map((rg) => ({ label: rg, value: rg }))),
+            ]}
+          />
+          <SelectField
+            label="Type"
+            value={fType}
+            onChange={(v) => setFType(v)}
+            options={[
+              { label: "All", value: "" },
+              { label: "Franchise", value: "Franchise" },
+              { label: "Independent", value: "Independent" },
+            ]}
+          />
+          <SelectField
+            label="Status"
+            value={fStatus}
+            onChange={(v) => setFStatus(v)}
+            options={[
+              { label: "All", value: "" },
+              ...["Active", "Pending", "Prospect", "Inactive", "Black Listed"].map((s) => ({
+                label: s,
+                value: s,
+              })),
+            ]}
+          />
+        </div>
 
-    {/* Type filter */}
-    <SelectField
-      label="Type"
-      value={fType}
-      onChange={(v) => setFType(v)}
-      options={[
-        { label: "All", value: "" },
-        { label: "Franchise", value: "Franchise" },
-        { label: "Independent", value: "Independent" },
-      ]}
-    />
-
-    {/* Status filter */}
-    <SelectField
-      label="Status"
-      value={fStatus}
-      onChange={(v) => setFStatus(v)}
-      options={[
-        { label: "All", value: "" },
-        ...["Active", "Pending", "Prospect", "Inactive", "Black Listed"].map(
-          (s) => ({ label: s, value: s })
-        ),
-      ]}
-    />
-  </div>
-
-  <div className="mt-3 flex items-center gap-3">
-    <button
-      onClick={() => {
-        setQ("");
-        setFRep("");
-        setFState("");
-        setFRegion("");
-        setFType("");
-        setFStatus("");
-      }}
-      className="text-sm text-blue-700 hover:underline"
-    >
-      Clear filters
-    </button>
-  </div>
-</div>
+        <div className={`${filtersOpen ? "flex" : "hidden"} md:flex mt-3 items-center gap-3`}>
+          <button
+            onClick={() => {
+              setQ("");
+              setFRep("");
+              setFState("");
+              setFRegion("");
+              setFType("");
+              setFStatus("");
+            }}
+            className="text-sm text-blue-700 hover:underline"
+            type="button"
+          >
+            Clear filters
+          </button>
+        </div>
+      </div>
 
       {/* Tasks row for reps (already shown in top bar as chips) */}
       {tasksForUser.filter((t) => !t.completedAtISO).length > 0 && (
@@ -1701,8 +1755,36 @@ const paged = useMemo(() => {
         </div>
       )}
 
-      {/* Results (Last Note column removed) */}
-      <div className="rounded-xl border bg-white p-0 shadow-sm overflow-x-auto md:overflow-visible">
+      {/* Results */}
+      <div className="md:hidden space-y-2">
+        {paged.map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            className="w-full text-left rounded-xl border bg-white p-3 shadow-sm"
+            onClick={() => goToDealer(d.id)}
+          >
+            <div className="font-medium text-slate-800 break-words">{d.name}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {repNameForDealer(d)}
+              {d.region || d.state ? ` · ${d.region}${d.region && d.state ? ", " : ""}${d.state}` : ""}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">Last visited: {d.lastVisited || "—"}</div>
+          </button>
+        ))}
+        {isSearching && filtered.length === 0 && (
+          <div className="rounded-xl border bg-white p-6 text-center text-slate-500 text-sm">
+            No dealers match your search.
+          </div>
+        )}
+        {!isSearching && recentTop10.length === 0 && (
+          <div className="rounded-xl border bg-white p-6 text-center text-slate-500 text-sm">
+            No recently visited dealers yet.
+          </div>
+        )}
+      </div>
+
+      <div className="hidden md:block rounded-xl border bg-white p-0 shadow-sm overflow-x-auto md:overflow-visible">
         <table className="min-w-[700px] md:min-w-[900px] w-full text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
@@ -1715,79 +1797,67 @@ const paged = useMemo(() => {
               <th className="py-1.5 px-2 md:py-2 md:px-3 text-right">Last Visited</th>
             </tr>
           </thead>
-
           <tbody>
-          {paged.map((d) => {
-              const hasOverride = Boolean(d.assignedRepUsername);
-              return (
-                <tr
-                  key={d.id}
-                  className="border-t hover:bg-blue-50/40 cursor-pointer odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white"
-                  onClick={() => goToDealer(d.id)}
-                >
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 font-medium text-slate-800">{d.name}</td>
-
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">
-                    <div className="flex items-center gap-2">
-                      <span>{repNameForDealer(d)}</span>
-                      {/* Override badge removed per user request - functionality preserved */}
-                    </div>
-                  </td>
-
-                  <td className="py-1.5 px-2 md:py-2 md:px-3">{d.region}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.state}</td>
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.type}</td>
-
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
-                  </td>
-
-                  <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">{d.lastVisited || "—"}</td>
-                </tr>
-              );
-            })}
-
-{isSearching && filtered.length === 0 && (
-  <tr>
-    <td colSpan={7} className="py-6 text-center text-slate-500">
-      No dealers match your search.
-    </td>
-  </tr>
-)}
-
-{!isSearching && recentTop10.length === 0 && (
-  <tr>
-    <td colSpan={7} className="py-6 text-center text-slate-500">
-      No recently visited dealers yet.
-    </td>
-  </tr>
-)}
+            {paged.map((d) => (
+              <tr
+                key={d.id}
+                className="border-t hover:bg-blue-50/40 cursor-pointer odd:bg-slate-50 even:bg-white md:odd:bg-white md:even:bg-white"
+                onClick={() => goToDealer(d.id)}
+              >
+                <td className="py-1.5 px-2 md:py-2 md:px-3 font-medium text-slate-800">{d.name}</td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3">{repNameForDealer(d)}</td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3">{d.region}</td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.state}</td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">{d.type}</td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3 hidden md:table-cell">
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
+                </td>
+                <td className="py-1.5 px-2 md:py-2 md:px-3 text-right">{d.lastVisited || "—"}</td>
+              </tr>
+            ))}
+            {isSearching && filtered.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-6 text-center text-slate-500">
+                  No dealers match your search.
+                </td>
+              </tr>
+            )}
+            {!isSearching && recentTop10.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-6 text-center text-slate-500">
+                  No recently visited dealers yet.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
-        {isSearching && totalPages > 1 && (
-  <div className="mt-3 flex items-center justify-between">
-    <div className="text-sm text-slate-600">
-      Page {page} of {totalPages}
-    </div>
-    <div className="flex items-center gap-2">
-      <button
-        className="px-3 py-2 rounded-lg border border-slate-300 disabled:opacity-50"
-        onClick={() => setPage((p) => Math.max(1, p - 1))}
-        disabled={page <= 1}
-      >
-        Previous
-      </button>
-      <button
-        className="px-3 py-2 rounded-lg border border-slate-300 disabled:opacity-50"
-        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-        disabled={page >= totalPages}
-      >
-        Next
-      </button>
-    </div>
-  </div>
-)}
       </div>
+
+      {isSearching && totalPages > 1 && (
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm text-slate-600">
+            Page {page} of {totalPages}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-2 rounded-lg border border-slate-300 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              type="button"
+            >
+              Previous
+            </button>
+            <button
+              className="px-3 py-2 rounded-lg border border-slate-300 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              type="button"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Add Dealer Modal */}
       {addOpen && (
@@ -2009,7 +2079,7 @@ const paged = useMemo(() => {
 
               {isAdmin && (
                 <button
-                  className="md:hidden w-full px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60"
+                  className={`${showInsightsSplit ? "md:hidden" : ""} w-full md:w-auto px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60`}
                   onClick={generateHomeInsights}
                   disabled={loadingInsights}
                   title="Analyzes all reps in this date range. Runs only when you click."
@@ -2045,7 +2115,7 @@ const paged = useMemo(() => {
 
             <div
               className={`min-w-0 min-h-0 ${
-                isAdmin
+                isAdmin && showInsightsSplit
                   ? "flex-1 md:grid md:grid-cols-2 md:gap-3 md:overflow-hidden"
                   : "flex-1 overflow-auto"
               }`}
@@ -2054,7 +2124,7 @@ const paged = useMemo(() => {
                 <div
                   className={`${
                     summaryTab === "insights" ? "flex" : "hidden"
-                  } md:flex flex-col min-w-0 min-h-0 overflow-auto border rounded-xl p-3 bg-slate-50 mb-3 md:mb-0`}
+                  } ${showInsightsSplit ? "md:flex" : "md:hidden"} flex-col min-w-0 min-h-0 overflow-auto border rounded-xl p-3 bg-slate-50 mb-3 md:mb-0`}
                 >
                   <div className="shrink-0 flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
@@ -2753,12 +2823,12 @@ const doDeleteDealer = async () => {
   const repList = users.filter((u) => u.role === "Rep");
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <button className="text-blue-700 hover:underline" onClick={() => setRoute("dealer-search")}>
+    <div className="space-y-4 pb-24 md:pb-0">
+      <div className="space-y-2">
+        <button className="text-blue-700 hover:underline" onClick={() => setRoute("dealer-search")} type="button">
           ← Back to Dealer Search
         </button>
-        <div className="flex items-center gap-2">
+        <div className="w-full">
           <SelectField
             label="Status"
             value={dealer.status}
@@ -2815,18 +2885,18 @@ const doDeleteDealer = async () => {
       </div>
 
 {/* Dealer Database button + Edit/Save/Cancel */}
-<div className="flex items-center gap-2 flex-wrap">
+<div className="grid grid-cols-2 gap-2 w-full md:flex md:w-auto md:items-center">
         
 <a href="https://datatportal.vercel.app/dealer-report.html"
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium transition-colors"
+        className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 md:py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm md:text-xs font-medium transition-colors"
       >
           <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16M9 11h6M9 15h6" />
           </svg>
           Dealer Database
-          <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3 h-3 flex-shrink-0 hidden md:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
         </a>
@@ -2834,7 +2904,8 @@ const doDeleteDealer = async () => {
         {!isEditing && repCanAccess && (
           <button
             onClick={() => setIsEditing(true)}
-            className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+            className={`${brand.primary} text-white px-4 py-2.5 md:py-2 rounded-lg`}
+            type="button"
           >
             Edit
           </button>
@@ -2844,7 +2915,8 @@ const doDeleteDealer = async () => {
           <>
             <button
               onClick={saveAllAndClose}
-              className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+              className={`${brand.primary} text-white px-4 py-2.5 md:py-2 rounded-lg`}
+              type="button"
             >
               Save
             </button>
@@ -2859,7 +2931,8 @@ const doDeleteDealer = async () => {
                 });
                 setIsEditing(false);
               }}
-              className="px-4 py-2 rounded-lg border border-slate-300"
+              className="px-4 py-2.5 md:py-2 rounded-lg border border-slate-300 col-span-2 md:col-span-1"
+              type="button"
             >
               Cancel
             </button>
@@ -3065,9 +3138,10 @@ const doDeleteDealer = async () => {
         </div>
         <div className="mt-3 flex justify-end">
           <button 
-            className={`${brand.primary} text-white px-4 py-2 rounded-lg flex items-center justify-center gap-2 ${isSavingNote ? 'opacity-50 cursor-not-allowed' : ''}`} 
+            className={`${brand.primary} text-white px-4 py-2.5 md:py-2 rounded-lg flex items-center justify-center gap-2 w-full md:w-auto ${isSavingNote ? 'opacity-50 cursor-not-allowed' : ''}`} 
             onClick={addNote} 
             disabled={!repCanAccess || isSavingNote}
+            type="button"
           >
             {isSavingNote ? (
               <>
@@ -3116,30 +3190,32 @@ const doDeleteDealer = async () => {
 
             return (
               <div key={n.id} className="border rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${noteBadgeLocal(n.category)}`}>{labelNoteLocal(n.category)}</span>
                     <span className="text-xs text-slate-500">
                       by <strong>{n.authorUsername}</strong> • {new Date(n.tsISO).toLocaleString()}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="grid grid-cols-2 sm:flex sm:items-center gap-2">
                     {showComplete && (
                       <button
-                        className="px-2 py-1 rounded border border-green-600 text-green-700 hover:bg-green-50 text-xs"
+                        className="px-3 py-2 sm:px-2 sm:py-1 rounded-lg sm:rounded border border-green-600 text-green-700 hover:bg-green-50 text-xs"
                         onClick={completeMyTask}
                         title="Mark this manager task as completed"
+                        type="button"
                       >
                         Complete Task
                       </button>
                     )}
                     {canDeleteNote && (
                       <button
-                        className="px-2 py-1 rounded border border-red-600 text-red-700 hover:bg-red-50 text-xs"
+                        className={`px-3 py-2 sm:px-2 sm:py-1 rounded-lg sm:rounded border border-red-600 text-red-700 hover:bg-red-50 text-xs ${showComplete ? "" : "col-span-2 sm:col-span-1"}`}
                         onClick={() => deleteNote(n.id, n.authorUsername)}
                         title="Delete this note"
+                        type="button"
                       >
-                        🗑️ Delete
+                        Delete
                       </button>
                     )}
                   </div>
@@ -3993,24 +4069,25 @@ const monthlyVisits = useMemo(() => {
           <div className="text-xl font-semibold text-slate-800">Reporting</div>
           <div className="text-sm text-slate-500">Activity, coverage, and visit cadence</div>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600">View:</label>
-          <SelectField
-            label="Rep"
-            value={repFilter}
-            onChange={(v) => setRepFilter((v || "ALL") as RepFilter)}
-            options={[
-              { label: "All Reps", value: "ALL" },
-              ...reps.map((r) => ({
-                label: `${r.name} (${r.username})`,
-                value: r.username,
-              })),
-            ]}
-          />
+        <div className="flex flex-col md:flex-row md:items-center gap-2 w-full md:w-auto">
+          <div className="w-full md:w-auto">
+            <SelectField
+              label="Rep"
+              value={repFilter}
+              onChange={(v) => setRepFilter((v || "ALL") as RepFilter)}
+              options={[
+                { label: "All Reps", value: "ALL" },
+                ...reps.map((r) => ({
+                  label: `${r.name} (${r.username})`,
+                  value: r.username,
+                })),
+              ]}
+            />
+          </div>
           <button
             type="button"
             onClick={() => setDlOpen(true)}
-            className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs sm:text-sm"
+            className="px-3 py-2.5 md:py-2 rounded-lg bg-blue-600 text-white text-sm w-full md:w-auto"
           >
             Dealer List
           </button>
@@ -4346,7 +4423,7 @@ const monthlyVisits = useMemo(() => {
           title={`Dealer List — ${repFilter === "ALL" ? "All Reps" : (selectedRep?.name || selectedRep?.username || "Rep")}`}
           onClose={() => setDlOpen(false)}
         >
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
             <div className="text-sm text-slate-600">
               Showing dealers within <span className="font-medium">{sectionTitle}</span>
             </div>
@@ -4357,14 +4434,32 @@ const monthlyVisits = useMemo(() => {
                   e.preventDefault();
                   exportDealerListCSV();
                 }}
-                className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs sm:text-sm"
+                className="px-3 py-2.5 md:py-2 rounded-lg bg-slate-700 text-white text-sm w-full md:w-auto"
               >
                 Export CSV
               </button>
             </div>
           </div>
 
-          <div className="border rounded-lg overflow-hidden">
+          <div className="md:hidden space-y-2 max-h-96 overflow-auto">
+            {dealerListRows.map((r, idx) => (
+              <div key={idx} className="rounded-xl border bg-white p-3">
+                <div className="font-medium text-slate-800 break-words">{r.dealer || "—"}</div>
+                <div className="text-xs text-slate-500 mt-1">{r.rep || "—"}</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  {[r.region, r.state].filter(Boolean).join(", ") || "—"}
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Last visited: {r.lastVisited ? new Date(r.lastVisited).toLocaleDateString() : "—"}
+                </div>
+              </div>
+            ))}
+            {dealerListRows.length === 0 && (
+              <div className="px-3 py-3 text-sm text-slate-500">No dealers to display.</div>
+            )}
+          </div>
+
+          <div className="hidden md:block border rounded-lg overflow-hidden">
             <div className="grid grid-cols-12 bg-slate-50 text-slate-600 text-xs font-medium">
               <div className="col-span-2 px-3 py-2">Region</div>
               <div className="col-span-4 px-3 py-2">Dealer</div>
@@ -5313,12 +5408,46 @@ const confirmImportDealers = async () => {
       {/* Users */}
       <Card title="Users">
         <div className="mb-3">
-          <button className={`${brand.primary} text-white px-3 py-2 rounded-lg`} onClick={openAddUser}>
-            ➕ Add User
+          <button className={`${brand.primary} text-white px-3 py-2.5 md:py-2 rounded-lg w-full md:w-auto`} onClick={openAddUser} type="button">
+            Add User
           </button>
         </div>
 
-        <div className="overflow-auto rounded-lg border bg-white">
+        <div className="md:hidden space-y-2">
+          {users.map((u) => (
+            <div key={u.id} className="rounded-xl border bg-white p-3">
+              <div className="font-medium text-slate-800 break-words">{u.name?.trim() || u.username}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{u.username}</div>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-xs text-slate-600">{u.role}</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                    getStatus(u) === "Active" ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-700"
+                  }`}
+                >
+                  {getStatus(u)}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button className="px-3 py-2.5 rounded-lg border text-slate-700 text-sm" onClick={() => openEditUser(u)} type="button">
+                  Edit
+                </button>
+                <button
+                  className="px-3 py-2.5 rounded-lg border border-red-600 text-red-700 text-sm"
+                  onClick={() => setConfirmRemove(u)}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+          {users.length === 0 && (
+            <div className="rounded-xl border bg-white p-6 text-center text-slate-500 text-sm">No users.</div>
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-auto rounded-lg border bg-white">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
@@ -5394,8 +5523,9 @@ const confirmImportDealers = async () => {
             {/* Mobile: keep button; search moved to Regions card */}
 <div className="sm:col-span-2">
   <button
-    className="md:hidden px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+    className="md:hidden w-full px-3 py-2.5 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
     onClick={createRegion}
+    type="button"
   >
     Add / Create
   </button>
@@ -5435,7 +5565,7 @@ const confirmImportDealers = async () => {
 
   <button
     type="button"
-    className="mt-4 px-3 py-2 rounded-xl border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
+    className="mt-4 w-full md:w-auto px-3 py-2.5 md:py-2 rounded-xl border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
     onClick={moveDealers}
     disabled={!fromState || !fromRegion || !toState || !toRegion}
   >
@@ -5457,7 +5587,35 @@ const confirmImportDealers = async () => {
     />
   </div>
 
-  <div className="overflow-auto rounded-lg border bg-white">
+  <div className="md:hidden space-y-2">
+    {regionPageRows.map((r) => (
+      <div key={`${r.state}-${r.region}`} className="rounded-xl border bg-white p-3">
+        <div className="font-medium text-slate-800 break-words">{r.region}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{r.state} · {r.count} dealer{r.count === 1 ? "" : "s"}</div>
+        <div className="grid grid-cols-2 gap-2 mt-3">
+          <button
+            className="px-3 py-2.5 rounded-lg border text-slate-700 text-sm"
+            onClick={() => setRegionModal({ state: r.state, region: r.region })}
+            type="button"
+          >
+            View
+          </button>
+          <button
+            className="px-3 py-2.5 rounded-lg border border-red-600 text-red-700 text-sm"
+            onClick={() => deleteRegion(r.state, r.region)}
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    ))}
+    {regionPageRows.length === 0 && (
+      <div className="rounded-xl border bg-white p-6 text-center text-slate-500 text-sm">No regions.</div>
+    )}
+  </div>
+
+  <div className="hidden md:block overflow-auto rounded-lg border bg-white">
     <table className="w-full text-sm">
       <thead className="bg-slate-50 text-slate-600">
         <tr>
@@ -5526,9 +5684,9 @@ const confirmImportDealers = async () => {
       </Card>
 
      {/* Export quick actions */}
-     <div className="flex flex-wrap gap-2">
+     <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:flex-wrap gap-2">
      <button
-  className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60"
+  className="px-3 py-2.5 md:py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50 disabled:opacity-60 w-full md:w-auto"
   onClick={exportEverythingZip}
   disabled={exportingAll}
   type="button"
@@ -5536,7 +5694,7 @@ const confirmImportDealers = async () => {
 >
   {exportingAll ? "Exporting…" : "Export Everything"}
 </button>
-<span className="relative inline-block">
+<span className="relative block md:inline-block">
   {/* Hidden file input used by the Import button */}
   <input
     ref={fileInputRef}
@@ -5550,7 +5708,7 @@ const confirmImportDealers = async () => {
     }}
   />
   <button
-    className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
+    className="px-3 py-2.5 md:py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50 w-full md:w-auto"
     onClick={() => fileInputRef.current?.click()}
     type="button"
   >
@@ -7674,7 +7832,7 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
   };
 
   // action button class (mobile-friendly)
-  const actionBtn = "px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base whitespace-nowrap";
+  const actionBtn = "px-3 py-2.5 md:px-3 md:py-2 rounded-lg border text-sm md:text-base text-center";
 
   // --- render ---
   const sortedRoute = [...route].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
@@ -7784,112 +7942,170 @@ const exportDailySummaryCSV = () => {
 };
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div className="space-y-3">
         <div>
-        <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
-<div className="flex items-center gap-2 flex-wrap">
-  <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
-  <button
-    onClick={() => setDailyOpen(true)}
-    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
-    title="Show notes summary"
-  >
-    <span className="inline-block -ml-1">📄</span>
-    Daily Summary
-  </button>
-</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Dealer Notes</div>
+          <h1 className="text-2xl md:text-3xl font-bold">Rep Route</h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Mobile toolbar */}
+        <div className="md:hidden space-y-2">
           <input
             type="date"
             value={dateStr}
             onChange={(e) => setDateStr(e.target.value)}
-            className="border rounded-lg px-3 py-2"
+            className="w-full min-w-0 border rounded-lg px-3 py-2.5"
             title="Pick a day"
           />
-          {/* NEW: Preset Buttons */}
-          <button 
-            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium"
-            onClick={() => {
-              setSaveModalOpen(true);
-              setPresetName("");
-            }}
-            title="Save current route as preset"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-            </svg>
-            <span className="hidden sm:inline">Save Preset</span>
-          </button>
-          <button 
-            className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2 text-sm font-medium"
-            onClick={() => {
-              setLoadModalOpen(true);
-              setSelectedPresetId("");
-            }}
-            title="Load a saved preset"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            <span className="hidden sm:inline">Load Preset</span>
-          </button>
-          <button 
-            className="px-3 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium"
-            onClick={() => setManageModalOpen(true)}
-            title="Manage presets"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <span className="hidden sm:inline">Manage</span>
-          </button>
-          <button className="px-3 py-2 rounded-lg border" onClick={clearDay}>
-            Clear Day
-          </button>
-          <button className="px-3 py-2 rounded-lg border" onClick={exportCSV}>
-            Export CSV
-          </button>
-          <button className="px-3 py-2 rounded-lg border" onClick={copyAll}>
-            Copy All
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setDailyOpen(true)}
+              className="px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium"
+              type="button"
+            >
+              Daily Summary
             </button>
-        
             <a
-            href={allStopsMapUrl()}
-            target="_blank"
-            rel="noreferrer"
-            className={`px-3 py-2 rounded-lg border ${sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
+              href={allStopsMapUrl()}
+              target="_blank"
+              rel="noreferrer"
+              className={`px-3 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-medium text-center ${
+                sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""
+              }`}
+            >
+              Open in Maps
+            </a>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="px-3 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium"
+              onClick={() => {
+                setSaveModalOpen(true);
+                setPresetName("");
+              }}
+              type="button"
+            >
+              Save Preset
+            </button>
+            <button
+              className="px-3 py-2.5 rounded-lg bg-green-600 text-white text-sm font-medium"
+              onClick={() => {
+                setLoadModalOpen(true);
+                setSelectedPresetId("");
+              }}
+              type="button"
+            >
+              Load Preset
+            </button>
+            <button
+              className="px-3 py-2.5 rounded-lg bg-slate-700 text-white text-sm font-medium"
+              onClick={() => setManageModalOpen(true)}
+              type="button"
+            >
+              Manage
+            </button>
+            <button className="px-3 py-2.5 rounded-lg border text-sm font-medium" onClick={clearDay} type="button">
+              Clear Day
+            </button>
+            <button className="px-3 py-2.5 rounded-lg border text-sm font-medium" onClick={exportCSV} type="button">
+              Export CSV
+            </button>
+            <button className="px-3 py-2.5 rounded-lg border text-sm font-medium" onClick={copyAll} type="button">
+              Copy All
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop toolbar */}
+        <div className="hidden md:flex md:flex-row md:items-center md:justify-between gap-3">
+          <button
+            onClick={() => setDailyOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow"
+            title="Show notes summary"
+            type="button"
           >
-            🗺️ Open Route in Maps
-          </a>
+            Daily Summary
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="date"
+              value={dateStr}
+              onChange={(e) => setDateStr(e.target.value)}
+              className="border rounded-lg px-3 py-2"
+              title="Pick a day"
+            />
+            <button
+              className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium"
+              onClick={() => {
+                setSaveModalOpen(true);
+                setPresetName("");
+              }}
+              title="Save current route as preset"
+              type="button"
+            >
+              Save Preset
+            </button>
+            <button
+              className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2 text-sm font-medium"
+              onClick={() => {
+                setLoadModalOpen(true);
+                setSelectedPresetId("");
+              }}
+              title="Load a saved preset"
+              type="button"
+            >
+              Load Preset
+            </button>
+            <button
+              className="px-3 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium"
+              onClick={() => setManageModalOpen(true)}
+              title="Manage presets"
+              type="button"
+            >
+              Manage
+            </button>
+            <button className="px-3 py-2 rounded-lg border" onClick={clearDay} type="button">
+              Clear Day
+            </button>
+            <button className="px-3 py-2 rounded-lg border" onClick={exportCSV} type="button">
+              Export CSV
+            </button>
+            <button className="px-3 py-2 rounded-lg border" onClick={copyAll} type="button">
+              Copy All
+            </button>
+            <a
+              href={allStopsMapUrl()}
+              target="_blank"
+              rel="noreferrer"
+              className={`px-3 py-2 rounded-lg border ${sortedRoute.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
+            >
+              Open Route in Maps
+            </a>
+          </div>
         </div>
       </div>
 
     {/* Search & Filters */}
 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-<div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+<div className="flex flex-col md:flex-row md:items-center md:justify-between mb-3 gap-2">
     <h2 className="text-lg font-semibold">Find your dealers</h2>
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <span className="text-sm text-slate-500">
         {q.trim().length < 2 ? "Type at least 2 letters" : `Results: ${filtered.length}`}
       </span>
       {filtered.length > 0 && (
         <button
-          className="text-sm px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+          className="text-sm px-3 py-2.5 md:py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto"
           onClick={addAllFiltered}
+          type="button"
         >
-          + Add all {filtered.length} to route
+          Add all {filtered.length} to route
         </button>
       )}
     </div>
   </div>
 
-  {/* Search input + filters (wrap nicely on mobile) */}
   <div className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto]">
-    {/* search */}
     <div className="relative md:col-span-1">
       <input
         value={q}
@@ -7897,18 +8113,17 @@ const exportDailySummaryCSV = () => {
         onFocus={() => setOpenSug(true)}
         onBlur={() => setTimeout(() => setOpenSug(false), 150)}
         placeholder="Search dealers (name, city, region)…"
-        className="w-full border rounded-lg px-3 py-2"
+        className="w-full min-w-0 border rounded-lg px-3 py-2.5 md:py-2"
       />
-
-      {/* Mobile suggestions dropdown (mobile only) */}
       {openSug && q.trim().length >= 2 && mobileSuggestions.length > 0 && (
         <div className="md:hidden absolute z-20 left-0 right-0 mt-1 max-h-64 overflow-auto bg-white border rounded-lg shadow">
           {mobileSuggestions.map((d) => (
             <button
               key={d.id}
-              className="w-full text-left px-3 py-2 hover:bg-slate-50"
-              onMouseDown={(e) => e.preventDefault()}  // keep input from blurring
+              className="w-full text-left px-3 py-2.5 hover:bg-slate-50"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => { addDealer(d); setOpenSug(false); }}
+              type="button"
             >
               <div className="font-medium">{d.name}</div>
               <div className="text-xs text-slate-500">
@@ -7924,9 +8139,8 @@ const exportDailySummaryCSV = () => {
       )}
     </div>
 
-    {/* filters */}
     <select
-      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm md:rounded-full md:py-1.5 md:w-auto"
       value={state}
       onChange={(e) => setState(e.target.value)}
     >
@@ -7937,7 +8151,7 @@ const exportDailySummaryCSV = () => {
     </select>
 
     <select
-      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm md:rounded-full md:py-1.5 md:w-auto"
       value={region}
       onChange={(e) => setRegion(e.target.value)}
     >
@@ -7948,7 +8162,7 @@ const exportDailySummaryCSV = () => {
     </select>
 
     <select
-      className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 pr-8 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 whitespace-nowrap mr-2 mb-2"
+      className="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm md:rounded-full md:py-1.5 md:w-auto"
       value={city}
       onChange={(e) => setCity(e.target.value)}
     >
@@ -7973,20 +8187,18 @@ const exportDailySummaryCSV = () => {
     {filtered.map((d) => {
       const inRoute = routeIds.has(d.id);
       return (
-        <div key={d.id} className="flex items-center justify-between bg-white rounded-xl border p-3">
-          <div>
-            <div className="font-semibold">{d.name}</div>
-            <div className="text-sm text-slate-600">
+        <div key={d.id} className="flex items-start justify-between gap-3 bg-white rounded-xl border p-3 min-w-0">
+          <div className="min-w-0">
+            <div className="font-semibold break-words">{d.name}</div>
+            <div className="text-sm text-slate-600 break-words">
               {[d.address1, d.address2, d.city, d.state, d.zip].filter(Boolean).join(", ")}
             </div>
             <div className="text-xs text-slate-500">{d.region}</div>
             <div className="text-xs text-slate-500">Last Visited: {d.lastVisited || "—"}</div>
           </div>
-          <div className="flex gap-2">
-            <button className={actionBtn} disabled={inRoute} onClick={() => addDealer(d)}>
-              {inRoute ? "Added" : "Add"}
-            </button>
-          </div>
+          <button className={`${actionBtn} shrink-0`} disabled={inRoute} onClick={() => addDealer(d)} type="button">
+            {inRoute ? "Added" : "Add"}
+          </button>
         </div>
       );
     })}
@@ -8028,20 +8240,19 @@ const exportDailySummaryCSV = () => {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 w-full md:w-auto md:ml-auto md:justify-end">
-                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "up")} disabled={idx === 0}>↑</button>
-                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "down")} disabled={idx === sortedRoute.length - 1}>↓</button>
-                    
+                  <div className="grid grid-cols-2 gap-2 w-full md:flex md:flex-wrap md:w-auto md:ml-auto md:justify-end">
+                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "up")} disabled={idx === 0} type="button">Up</button>
+                    <button className={`${actionBtn} md:hidden`} onClick={() => move(r.dealerId, "down")} disabled={idx === sortedRoute.length - 1} type="button">Down</button>
                     <a
                     href={d ? mapUrl(d) : "#"}
                       target="_blank"
                       rel="noreferrer"
-                      className={`${actionBtn}`}
+                      className={`${actionBtn} text-center`}
                     >
                       Maps
                     </a>
-                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)}>View</button>
-                    <button className={actionBtn} onClick={() => removeDealer(r.dealerId)}>Remove</button>
+                    <button className={actionBtn} onClick={() => viewDealer(r.dealerId)} type="button">View</button>
+                    <button className={`${actionBtn} col-span-2 md:col-span-1`} onClick={() => removeDealer(r.dealerId)} type="button">Remove</button>
                   </div>
               </div>
               );
@@ -8497,6 +8708,7 @@ const DealerMasterListView: React.FC<{
   const [fState, setFState] = useState("");
   const [fStatus, setFStatus] = useState("");
   const [fType, setFType] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<any>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -8838,7 +9050,7 @@ const DealerMasterListView: React.FC<{
           <div className="text-xl font-semibold text-slate-800">Dealer Master List</div>
           <div className="text-sm text-slate-500">{filtered.length.toLocaleString()} of {dealers.length.toLocaleString()} dealers</div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 gap-2 w-full md:flex md:w-auto md:items-center">
           <input
             ref={fileInputRef}
             type="file"
@@ -8847,40 +9059,110 @@ const DealerMasterListView: React.FC<{
             onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.currentTarget.value = ""; }}
           />
           <button
-            className="px-3 py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium"
+            className="px-3 py-2.5 md:py-2 rounded-lg border border-amber-600 text-amber-700 hover:bg-amber-50 text-sm font-medium"
             onClick={() => fileInputRef.current?.click()}
+            type="button"
           >
-            ↑ Upload CSV
+            Upload CSV
           </button>
           <button
-            className="px-3 py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
+            className="px-3 py-2.5 md:py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
             onClick={exportCSV}
+            type="button"
           >
-            ↓ Export
+            Export
           </button>
         </div>
       </div>
 
       {/* Filters */}
       <div className="rounded-xl border bg-white p-4 shadow-sm">
-        <div className="flex flex-col md:flex-row gap-3">
-          <div className="flex-1">
-            <input
-              className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-              placeholder="Search name, rep, state, region, CIF…"
-              value={q}
-              onChange={e => setQ(e.target.value)}
-            />
-          </div>
+        <input
+          className="w-full rounded-lg border px-3 py-2.5 md:py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          placeholder="Search name, rep, state, region, CIF…"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+        />
+        <button
+          type="button"
+          className="md:hidden w-full mt-3 flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm font-medium text-slate-700"
+          onClick={() => setFiltersOpen((o) => !o)}
+        >
+          <span>{[fState, fStatus, fType].filter(Boolean).length > 0 ? `Filters (${[fState, fStatus, fType].filter(Boolean).length})` : "Filters"}</span>
+          <span className="text-slate-400">{filtersOpen ? "Hide" : "Show"}</span>
+        </button>
+        <div className={`${filtersOpen ? "grid mt-3" : "hidden"} md:grid md:mt-3 grid-cols-1 md:grid-cols-4 gap-3`}>
           <SelectField label="State" value={fState} onChange={setFState} options={[{ label: "All States", value: "" }, ...stateOptions.map(s => ({ label: s, value: s }))]} />
           <SelectField label="Status" value={fStatus} onChange={setFStatus} options={[{ label: "All Statuses", value: "" }, ...["Active","Pending","Prospect","Inactive","Black Listed"].map(s => ({ label: s, value: s }))]} />
           <SelectField label="Type" value={fType} onChange={setFType} options={[{ label: "All Types", value: "" }, { label: "Independent", value: "Independent" }, { label: "Franchise", value: "Franchise" }]} />
-          <button className="text-sm text-blue-700 hover:underline whitespace-nowrap" onClick={() => { setQ(""); setFState(""); setFStatus(""); setFType(""); }}>Clear</button>
+          <button className="text-sm text-blue-700 hover:underline whitespace-nowrap self-end pb-2 text-left" onClick={() => { setQ(""); setFState(""); setFStatus(""); setFType(""); }} type="button">Clear</button>
         </div>
       </div>
 
+      {/* Mobile cards */}
+      <div className="md:hidden space-y-2">
+        {paged.map(d => {
+          const isEditing = editingId === d.id;
+          const repName = users.find(u => u.username === d.assignedRepUsername)?.name || "—";
+
+          if (isEditing) {
+            return (
+              <div key={d.id} className="rounded-xl border bg-blue-50 p-3 space-y-2">
+                <input className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.name} onChange={e => setEditDraft((p: any) => ({ ...p, name: e.target.value }))} placeholder="Dealer name" />
+                <input className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.cifNumber} onChange={e => setEditDraft((p: any) => ({ ...p, cifNumber: e.target.value }))} placeholder="CIF #" />
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.assignedRepUsername} onChange={e => setEditDraft((p: any) => ({ ...p, assignedRepUsername: e.target.value }))}>
+                  <option value="">— None —</option>
+                  {allUsers.map(u => <option key={u.username} value={u.username}>{u.name} ({u.username})</option>)}
+                </select>
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.state} onChange={e => setEditDraft((p: any) => ({ ...p, state: e.target.value, region: "" }))}>
+                  {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.region} onChange={e => setEditDraft((p: any) => ({ ...p, region: e.target.value }))}>
+                  <option value="">— Select region —</option>
+                  {regionOptions(editDraft.state).map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.type} onChange={e => setEditDraft((p: any) => ({ ...p, type: e.target.value }))}>
+                  <option value="Independent">Independent</option>
+                  <option value="Franchise">Franchise</option>
+                </select>
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.status} onChange={e => setEditDraft((p: any) => ({ ...p, status: e.target.value }))}>
+                  {["Active","Pending","Prospect","Inactive","Black Listed"].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <input className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.address1} onChange={e => setEditDraft((p: any) => ({ ...p, address1: e.target.value }))} placeholder="Address" />
+                <input className="w-full rounded-lg border px-3 py-2 text-sm" value={editDraft.city} onChange={e => setEditDraft((p: any) => ({ ...p, city: e.target.value }))} placeholder="City" />
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button className="px-3 py-2.5 rounded-lg bg-green-600 text-white text-sm font-medium" onClick={() => saveEdit(d.id)} type="button">Save</button>
+                  <button className="px-3 py-2.5 rounded-lg border text-sm" onClick={() => setEditingId(null)} type="button">Cancel</button>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={d.id} className="rounded-xl border bg-white p-3">
+              <div className="font-medium text-slate-800 break-words">{d.name}</div>
+              <div className="text-xs text-slate-500 mt-1">CIF: {(d as any).cifNumber || "—"}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{repName} · {d.state || "—"}</div>
+              <div className="mt-2">
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(d.status)}`}>{d.status}</span>
+              </div>
+              <button
+                className="mt-3 w-full px-3 py-2.5 rounded-lg border text-slate-700 text-sm"
+                onClick={() => startEdit(d)}
+                type="button"
+              >
+                Edit
+              </button>
+            </div>
+          );
+        })}
+        {paged.length === 0 && (
+          <div className="rounded-xl border bg-white p-6 text-center text-slate-500 text-sm">No dealers match your search.</div>
+        )}
+      </div>
+
       {/* Table */}
-      <div className="rounded-xl border bg-white shadow-sm overflow-x-auto">
+      <div className="hidden md:block rounded-xl border bg-white shadow-sm overflow-x-auto">
         <table className="w-full text-sm" style={{ minWidth: "1100px" }}>
           <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
             <tr>
@@ -8985,11 +9267,11 @@ const DealerMasterListView: React.FC<{
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="text-sm text-slate-500">Page {page} of {totalPages}</div>
           <div className="flex items-center gap-2">
-            <button className="px-3 py-1.5 rounded border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>Previous</button>
-            <button className="px-3 py-1.5 rounded border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next</button>
+            <button className="px-3 py-2.5 md:py-1.5 rounded-lg border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} type="button">Previous</button>
+            <button className="px-3 py-2.5 md:py-1.5 rounded-lg border text-slate-700 disabled:opacity-40" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} type="button">Next</button>
           </div>
         </div>
       )}
