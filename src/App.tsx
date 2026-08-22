@@ -368,17 +368,44 @@ const brand = {
   pill: "rounded-full",
 };
 
-const INSIGHT_SECTIONS: { key: keyof InsightsReport; title: string }[] = [
-  { key: "snapshot", title: "Snapshot" },
-  { key: "themes", title: "What dealers are talking about" },
-  { key: "positive", title: "Positive" },
-  { key: "concerns", title: "Concerns" },
-  { key: "competitiveLosses", title: "Competitive losses" },
-  { key: "programReception", title: "Program reception" },
-  { key: "eContracting", title: "eContracting" },
-  { key: "newProgram", title: "New program" },
-  { key: "watchItems", title: "Watch items" },
+const INSIGHT_SECTIONS: { key: keyof InsightsReport; title: string; accent: string }[] = [
+  { key: "snapshot", title: "Snapshot", accent: "border-l-slate-500" },
+  { key: "themes", title: "What dealers are talking about", accent: "border-l-slate-400" },
+  { key: "positive", title: "Positive", accent: "border-l-green-500" },
+  { key: "concerns", title: "Concerns", accent: "border-l-amber-500" },
+  { key: "competitiveLosses", title: "Competitive losses", accent: "border-l-red-500" },
+  { key: "programReception", title: "Program reception", accent: "border-l-blue-500" },
+  { key: "eContracting", title: "eContracting", accent: "border-l-blue-500" },
+  { key: "newProgram", title: "New program", accent: "border-l-blue-500" },
+  { key: "watchItems", title: "Watch items", accent: "border-l-slate-400" },
 ];
+
+function InsightReportView({ report }: { report: InsightsReport }) {
+  return (
+    <div className="space-y-2 min-w-0">
+      {INSIGHT_SECTIONS.map((s) => (
+        <div
+          key={s.key}
+          className={`rounded-lg border border-slate-200 border-l-4 ${s.accent} bg-white px-3 py-2 min-w-0`}
+        >
+          <div className="text-sm font-semibold text-slate-800">{s.title}</div>
+          <ul className="mt-1 list-disc pl-5 space-y-1">
+            {(report[s.key] || []).map((item, i) => (
+              <li
+                key={i}
+                className={`text-sm break-words ${
+                  item.toLowerCase().includes("nothing notable") ? "text-slate-400" : "text-slate-700"
+                }`}
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function formatInsightsPlainText(
   report: InsightsReport,
@@ -816,11 +843,29 @@ const DealerSearchView: React.FC<{
   const isAdminManager = role === "Admin" || role === "Manager";
 
   const [dailyOpen, setDailyOpen] = useState(false);
-  const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today"); // ← add "yesterday"
-  const [summaryRep, setSummaryRep] = useState<string>(session?.username || "ALL"); // defaults to logged-in user
-  const [customDate, setCustomDate] = useState<string>(""); // Custom date picker (YYYY-MM-DD format)
-  const [startDate, setStartDate] = useState<string>(""); // Date range: start date
-  const [endDate, setEndDate] = useState<string>(""); // Date range: end date
+  const [summaryRange, setSummaryRange] = useState<"today" | "yesterday" | "7d">("today");
+  const [summaryRep, setSummaryRep] = useState<string>(session?.username || "ALL");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [summaryTab, setSummaryTab] = useState<"insights" | "notes">("notes");
+  const isCustomRange = Boolean(startDate && endDate);
+  const todayYmd = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const applyDatePreset = (preset: "today" | "yesterday" | "7d") => {
+    setSummaryRange(preset);
+    setStartDate("");
+    setEndDate("");
+  };
+  const applyCustomRange = () => {
+    const t = todayYmd();
+    setStartDate((s) => s || t);
+    setEndDate((e) => e || t);
+  };
 // Data fetched from Supabase for the Daily Summary (Home)
 const [homeSummaryNotes, setHomeSummaryNotes] = useState<Note[]>([]);
 const [loadingHomeSummary, setLoadingHomeSummary] = useState(false);
@@ -870,24 +915,14 @@ useEffect(() => {
   endExclusive.setDate(endExclusive.getDate() + 1); // tomorrow 00:00 local
   let labelText = "";
 
-  // Priority 1: Date range (if both start and end dates are set)
+  // Custom from/to (inclusive) takes over presets
   if (startDate && endDate) {
     const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
     const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
     start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
-    endExclusive = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999); // End of end date
+    endExclusive = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
     labelText = `${startDate} – ${endDate}`;
-  }
-  // Priority 2: Single custom date
-  else if (customDate) {
-    const [year, month, day] = customDate.split('-').map(Number);
-    start = new Date(year, month - 1, day, 0, 0, 0, 0); // Local midnight
-    endExclusive = new Date(start);
-    endExclusive.setDate(endExclusive.getDate() + 1);
-    labelText = customDate;
-  }
-  // Priority 3: Preset ranges
-  else if (summaryRange === "yesterday") {
+  } else if (summaryRange === "yesterday") {
     start = new Date(startOfToday);
     start.setDate(start.getDate() - 1);           // yesterday 00:00 local
     endExclusive = new Date(startOfToday);        // today 00:00 local
@@ -956,13 +991,13 @@ useEffect(() => {
     }
     setLoadingHomeSummary(false);
   })();
-}, [dailyOpen, summaryRange, summaryRep, customDate, startDate, endDate, isRep, isAdminManager, session?.username]);
+}, [dailyOpen, summaryRange, summaryRep, startDate, endDate, isRep, isAdminManager, session?.username]);
 
 useEffect(() => {
   setInsights(null);
   setInsightsMeta(null);
   setInsightsError("");
-}, [summaryRange, customDate, startDate, endDate]);
+}, [summaryRange, startDate, endDate]);
 
 // Fetch missing dealers for Daily Summary notes (handles renamed dealers)
 useEffect(() => {
@@ -1086,6 +1121,7 @@ const generateHomeInsights = async () => {
     }
     setInsights(json.report as InsightsReport);
     setInsightsMeta({ noteCount: Number(json.noteCount) || 0, truncated: !!json.truncated });
+    setSummaryTab("insights");
   } catch (e: any) {
     const msg = e?.message || "Insights failed.";
     setInsightsError(msg);
@@ -1337,6 +1373,76 @@ const paged = useMemo(() => {
   };
   const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
   const dealerById = (id: string) => dealers.find((d) => d.id === id);
+  const isAdmin = session?.role === "Admin";
+  const summaryNoteCards = (
+    <div className="space-y-3 min-w-0">
+      {loadingHomeSummary && <div className="text-sm text-slate-500">Loading…</div>}
+      {!loadingHomeSummary && homeSummaryNotes.length === 0 && (
+        <div className="text-sm text-slate-500">No notes in selected range.</div>
+      )}
+      {!loadingHomeSummary &&
+        homeSummaryNotes.map((n) => {
+          const d = dealerById(n.dealerId);
+          return (
+            <div key={n.id} className="border rounded-lg p-3 min-w-0">
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <div className="text-sm font-medium text-slate-800 break-words min-w-0">
+                  {d ? d.name : "(dealer removed)"}
+                </div>
+                <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                  {n.category}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {fmtDateTime(n.tsISO)}
+                {n.authorUsername ? ` · ${n.authorUsername}` : ""}
+                {d ? ` · ${d.region}, ${d.state}` : ""}
+              </div>
+              <div className="text-sm text-slate-800 whitespace-pre-wrap break-words mt-2">{n.text}</div>
+            </div>
+          );
+        })}
+    </div>
+  );
+  const notesPaneActions = (
+    <div className="grid grid-cols-2 gap-2 mb-3">
+      <button
+        className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50 text-sm"
+        onClick={copyHomeDailySummary}
+        type="button"
+      >
+        Copy All
+      </button>
+      <button
+        className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50 text-sm"
+        onClick={exportHomeDailySummaryCSV}
+        type="button"
+      >
+        Export CSV
+      </button>
+    </div>
+  );
+  const insightsBody = (
+    <div className="min-w-0">
+      {loadingInsights && (
+        <div className="text-sm text-slate-500">Reading notes and generating the report…</div>
+      )}
+      {!loadingInsights && insightsError && !insights && (
+        <div className="text-sm text-slate-600 break-words">{insightsError}</div>
+      )}
+      {!loadingInsights && insightsMeta?.truncated && (
+        <div className="text-xs text-amber-700 mb-2">
+          Range was large — analyzed the most recent {insightsMeta.noteCount} notes.
+        </div>
+      )}
+      {!loadingInsights && insights && <InsightReportView report={insights} />}
+      {!loadingInsights && !insights && !insightsError && (
+        <div className="text-sm text-slate-500">
+          Pick a date range, then generate a market report from every rep’s notes. Nothing runs until you click.
+        </div>
+      )}
+    </div>
+  );
   const snippet = (s: string, len = 48) => (s.length > len ? s.slice(0, len) + "…" : s);
 
   // Scoped summary notes per role/range/rep
@@ -1807,225 +1913,210 @@ const paged = useMemo(() => {
 
       {/* Daily Summary Modal (Rep + Admin/Manager) */}
       {dailyOpen && (isRep || isAdminManager) && (
-        <Modal title="Daily Summary" onClose={() => setDailyOpen(false)}>
-          {/* Controls */}
-          <div className="flex flex-col md:flex-row md:items-end gap-3 mb-3">
-  {/* Range */}
-  <div className="flex items-center gap-2">
-    <label className="text-xs text-slate-600">Range:</label>
-    <select
-      className="border rounded-lg px-2 py-1"
-      value={summaryRange}
-      onChange={(e) => {
-        setSummaryRange(e.target.value as 'today' | 'yesterday' | '7d');
-        setCustomDate(''); // Clear custom date when changing preset
-        setStartDate(''); // Clear date range when changing preset
-        setEndDate('');
-      }}
-    >
-      <option value="today">Today</option>
-      <option value="yesterday">Yesterday</option>
-      <option value="7d">Last 7 Days</option>
-    </select>
-  </div>
+        <Modal title="Daily Summary" wide onClose={() => setDailyOpen(false)}>
+          <div className="flex flex-col gap-3 min-w-0 min-h-0 md:flex-1">
+            {/* Filters */}
+            <div className="shrink-0 space-y-3 min-w-0">
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { id: "today", label: "Today" },
+                    { id: "yesterday", label: "Yesterday" },
+                    { id: "7d", label: "Last 7 Days" },
+                  ] as const
+                ).map((p) => {
+                  const active = !isCustomRange && summaryRange === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyDatePreset(p.id)}
+                      className={`px-3 py-1.5 rounded-full text-sm border ${
+                        active
+                          ? "bg-slate-800 text-white border-slate-800"
+                          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={applyCustomRange}
+                  className={`px-3 py-1.5 rounded-full text-sm border ${
+                    isCustomRange
+                      ? "bg-slate-800 text-white border-slate-800"
+                      : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                  }`}
+                >
+                  Custom
+                </button>
+              </div>
 
-  {/* Custom Date Picker */}
-  <div className="flex items-center gap-2">
-    <label className="text-xs text-slate-600">📅 Or pick date:</label>
-    <input
-      type="date"
-      className="border rounded-lg px-2 py-1 text-sm"
-      value={customDate}
-      onChange={(e) => {
-        setCustomDate(e.target.value);
-        setStartDate(''); // Clear date range when single date is picked
-        setEndDate('');
-      }}
-      max={new Date().toISOString().split('T')[0]} // Can't pick future dates
-    />
-    {customDate && (
-      <button
-        className="text-xs text-slate-500 hover:text-slate-700"
-        onClick={() => setCustomDate('')}
-        title="Clear custom date"
-      >
-        ✕
-      </button>
-    )}
-  </div>
+              {isCustomRange && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
+                  <label className="block min-w-0">
+                    <div className="text-xs text-slate-500 mb-1">From</div>
+                    <input
+                      type="date"
+                      className="w-full min-w-0 border rounded-lg px-2 py-2 text-sm"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      max={endDate || todayYmd()}
+                    />
+                  </label>
+                  <label className="block min-w-0">
+                    <div className="text-xs text-slate-500 mb-1">To</div>
+                    <input
+                      type="date"
+                      className="w-full min-w-0 border rounded-lg px-2 py-2 text-sm"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      min={startDate}
+                      max={todayYmd()}
+                    />
+                  </label>
+                </div>
+              )}
 
-  {/* Date Range Picker */}
-  <div className="flex items-center gap-2 flex-wrap">
-    <label className="text-xs text-slate-600">📅 Or date range:</label>
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-slate-600">From:</span>
-      <input
-        type="date"
-        className="border rounded-lg px-2 py-1 text-sm"
-        value={startDate}
-        onChange={(e) => {
-          setStartDate(e.target.value);
-          setCustomDate(''); // Clear single date when range is picked
-        }}
-        max={endDate || new Date().toISOString().split('T')[0]}
-      />
-      <span className="text-xs text-slate-600">To:</span>
-      <input
-        type="date"
-        className="border rounded-lg px-2 py-1 text-sm"
-        value={endDate}
-        onChange={(e) => {
-          setEndDate(e.target.value);
-          setCustomDate(''); // Clear single date when range is picked
-        }}
-        min={startDate}
-        max={new Date().toISOString().split('T')[0]}
-      />
-      {(startDate || endDate) && (
-        <button
-          className="text-xs text-slate-500 hover:text-slate-700"
-          onClick={() => {
-            setStartDate('');
-            setEndDate('');
-          }}
-          title="Clear date range"
-        >
-          ✕
-        </button>
-      )}
-    </div>
-  </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0">
+                {(session?.role === "Admin" || session?.role === "Manager") && (
+                  <label className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-slate-600 shrink-0">Rep</span>
+                    <select
+                      className="border rounded-lg px-2 py-2 text-sm w-full sm:w-auto min-w-0"
+                      value={summaryRep}
+                      onChange={(e) => setSummaryRep(e.target.value)}
+                    >
+                      <option value="ALL">All</option>
+                      {Array.from(new Set((users || []).map((u) => u.username)))
+                        .sort()
+                        .map((u) => (
+                          <option key={u} value={u}>
+                            {u}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                )}
+                <div className="text-xs text-slate-500 sm:ml-auto">
+                  Showing {homeRangeLabel}
+                  {isAdminManager && summaryRep !== "ALL" ? ` · ${summaryRep}` : ""}
+                  {isAdmin ? " · insights use all reps" : ""}
+                </div>
+              </div>
 
-  {/* Rep filter (Admin/Manager only) */}
-  {(session?.role === 'Admin' || session?.role === 'Manager') && (
-    <div className="flex items-center gap-2">
-      <label className="text-xs text-slate-600">Rep:</label>
-      <select
-        className="border rounded-lg px-2 py-1"
-        value={summaryRep}
-        onChange={(e) => setSummaryRep(e.target.value)}
-      >
-        <option value="ALL">All</option>
-        {Array.from(new Set((users || []).map(u => u.username))).sort().map(u => (
-          <option key={u} value={u}>{u}</option>
-        ))}
-      </select>
-    </div>
-  )}
+              {isAdmin && (
+                <button
+                  className="md:hidden w-full px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60"
+                  onClick={generateHomeInsights}
+                  disabled={loadingInsights}
+                  title="Analyzes all reps in this date range. Runs only when you click."
+                  type="button"
+                >
+                  {loadingInsights ? "Generating…" : "Generate Insights"}
+                </button>
+              )}
+            </div>
 
-  {/* Buttons + "Showing" label (right side) */}
-  <div className="ml-auto flex items-center gap-2 flex-wrap">
-    <div className="text-xs text-slate-500">
-      Showing: {homeRangeLabel}
-      {(session?.role === 'Admin' || session?.role === 'Manager') && summaryRep !== 'ALL' ? ` • ${summaryRep}` : ''}
-    </div>
-    {session?.role === 'Admin' && (
-      <button
-        className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60"
-        onClick={generateHomeInsights}
-        disabled={loadingInsights}
-        title="Analyzes all reps in this date range. Runs only when you click."
-        type="button"
-      >
-        {loadingInsights ? "Generating…" : "Generate Insights"}
-      </button>
-    )}
-    <button
-      className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50"
-      onClick={copyHomeDailySummary}
-    >
-      Copy All
-    </button>
-    <button
-      className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50"
-      onClick={exportHomeDailySummaryCSV}
-    >
-      Export CSV
-    </button>
-  </div>
-</div>
+            {isAdmin && (
+              <div className="md:hidden shrink-0 grid grid-cols-2 gap-1 p-0.5 rounded-lg border bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSummaryTab("insights")}
+                  className={`rounded-md px-3 py-2 text-sm font-medium ${
+                    summaryTab === "insights" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                  }`}
+                >
+                  Insights
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryTab("notes")}
+                  className={`rounded-md px-3 py-2 text-sm font-medium ${
+                    summaryTab === "notes" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                  }`}
+                >
+                  Notes
+                </button>
+              </div>
+            )}
 
-{session?.role === 'Admin' && (insights || loadingInsights || insightsError) && (
-  <div className="border rounded-xl p-4 bg-slate-50 mb-4">
-    <div className="flex items-start justify-between gap-3 mb-2">
-      <div>
-        <div className="text-sm font-semibold text-slate-800">Market Insights</div>
-        <div className="text-xs text-slate-500">
-          {homeRangeLabel} • all reps
-          {insightsMeta ? ` • ${insightsMeta.noteCount} notes` : ''}
-        </div>
-      </div>
-      {insights && (
-        <button
-          className="px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm"
-          onClick={copyHomeInsights}
-          type="button"
-        >
-          Copy insights
-        </button>
-      )}
-    </div>
-    {loadingInsights && (
-      <div className="text-sm text-slate-500">Reading notes and generating the report…</div>
-    )}
-    {!loadingInsights && insightsError && !insights && (
-      <div className="text-sm text-slate-600">{insightsError}</div>
-    )}
-    {!loadingInsights && insightsMeta?.truncated && (
-      <div className="text-xs text-amber-700 mb-2">
-        Range was large — analyzed the most recent {insightsMeta.noteCount} notes.
-      </div>
-    )}
-    {!loadingInsights && insights && (
-      <div className="space-y-3">
-        {INSIGHT_SECTIONS.map((s) => (
-          <div key={s.key}>
-            <div className="text-sm font-semibold text-slate-800">{s.title}</div>
-            <ul className="mt-1 list-disc pl-5 space-y-1">
-              {(insights[s.key] || []).map((item, i) => (
-                <li key={i} className="text-sm text-slate-700">{item}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
-)}
+            <div
+              className={`min-w-0 min-h-0 ${
+                isAdmin
+                  ? "flex-1 md:grid md:grid-cols-2 md:gap-3 md:overflow-hidden"
+                  : "flex-1 overflow-auto"
+              }`}
+            >
+              {isAdmin && (
+                <div
+                  className={`${
+                    summaryTab === "insights" ? "flex" : "hidden"
+                  } md:flex flex-col min-w-0 min-h-0 overflow-auto border rounded-xl p-3 bg-slate-50 mb-3 md:mb-0`}
+                >
+                  <div className="shrink-0 flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-800">Market Insights</div>
+                      <div className="text-xs text-slate-500 break-words">
+                        {homeRangeLabel} · all reps
+                        {insightsMeta ? ` · ${insightsMeta.noteCount} notes` : ""}
+                      </div>
+                    </div>
+                    <div className="hidden md:flex flex-wrap gap-2 shrink-0">
+                      {insights && (
+                        <button
+                          className="px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm"
+                          onClick={copyHomeInsights}
+                          type="button"
+                        >
+                          Copy insights
+                        </button>
+                      )}
+                      <button
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm disabled:opacity-60"
+                        onClick={generateHomeInsights}
+                        disabled={loadingInsights}
+                        type="button"
+                      >
+                        {loadingInsights ? "Generating…" : "Generate Insights"}
+                      </button>
+                    </div>
+                    {insights && (
+                      <button
+                        className="md:hidden px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm self-start"
+                        onClick={copyHomeInsights}
+                        type="button"
+                      >
+                        Copy insights
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex-1 min-h-0 min-w-0">{insightsBody}</div>
+                </div>
+              )}
 
-{/* List */}
-<div className="space-y-3">
-  {loadingHomeSummary && (
-    <div className="text-sm text-slate-500">Loading…</div>
-  )}
-  {!loadingHomeSummary && homeSummaryNotes.length === 0 && (
-    <div className="text-sm text-slate-500">No notes in selected range.</div>
-  )}
-  {!loadingHomeSummary && homeSummaryNotes.map((n) => {
-    const d = dealerById(n.dealerId);
-    return (
-      <div key={n.id} className="border rounded-lg p-3">
-        <div className="text-xs text-slate-500 mb-1">{fmtDateTime(n.tsISO)}</div>
-        <div className="text-sm font-medium text-slate-800">
-          {d ? d.name : "(dealer removed)"}
-        </div>
-        <div className="text-xs text-slate-500 mb-1">
-          {d ? `${d.region}, ${d.state}` : ""}
-        </div>
-        <div className="inline-block text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 mb-1">
-          {n.category}
-        </div>
-        <div className="text-[11px] text-slate-500 mb-1">by {n.authorUsername}</div>
-        <div className="text-sm text-slate-800 whitespace-pre-wrap">{n.text}</div>
-      </div>
-    );
-  })}
-</div>
+              <div
+                className={`${
+                  isAdmin ? (summaryTab === "notes" ? "flex" : "hidden") + " md:flex" : "flex"
+                } flex-col min-w-0 min-h-0 overflow-auto border rounded-xl p-3`}
+              >
+                <div className="text-sm font-semibold text-slate-800 mb-2">Notes</div>
+                {notesPaneActions}
+                {summaryNoteCards}
+              </div>
+            </div>
 
-          <div className="mt-4 flex items-center justify-end">
-            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={() => setDailyOpen(false)}>
-              Close
-            </button>
+            <div className="shrink-0 flex items-center justify-end pt-1">
+              <button
+                className={`${brand.primary} text-white px-4 py-2 rounded-lg`}
+                onClick={() => setDailyOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </Modal>
       )}
@@ -6770,7 +6861,12 @@ const PlaceholderCard: React.FC<{ title: string; description?: string }> = ({ ti
   </div>
 );
 
-const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => {
+const Modal: React.FC<{
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  wide?: boolean;
+}> = ({ title, onClose, children, wide }) => {
   // Close on ESC
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -6786,11 +6882,15 @@ const Modal: React.FC<{ title: string; onClose: () => void; children: React.Reac
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
       {/* Container: bottom sheet on phones, centered dialog on desktop */}
-      <div className="absolute inset-0 flex items-end md:items-center justify-center p-0 md:p-4">
+      <div className="absolute inset-0 flex items-end md:items-center justify-center p-0 md:p-4 min-w-0">
         {/* Panel */}
-        <div className="w-full md:max-w-4xl bg-white shadow-xl md:rounded-2xl overflow-hidden flex flex-col h-[92vh] md:h-auto md:max-h-[90vh]">
+        <div
+          className={`w-full max-w-full bg-white shadow-xl md:rounded-2xl overflow-hidden flex flex-col h-[92vh] min-w-0 ${
+            wide ? "md:max-w-6xl md:h-[90vh] md:max-h-[90vh]" : "md:max-w-4xl md:h-auto md:max-h-[90vh]"
+          }`}
+        >
           {/* Sticky header with close button */}
-          <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white z-10">
+          <div className="flex items-center justify-between px-4 py-3 border-b shrink-0 bg-white z-10">
             <div className="text-slate-800 font-semibold truncate">{title}</div>
             <button
               onClick={onClose}
@@ -6802,13 +6902,17 @@ const Modal: React.FC<{ title: string; onClose: () => void; children: React.Reac
             </button>
           </div>
 
-          {/* Scrollable content area (phone-safe) */}
-          <div className="p-4 overflow-y-auto overscroll-contain flex-1">
+          {/* Scrollable content area (phone-safe). Wide: desktop panes scroll, not the whole page. */}
+          <div
+            className={`p-4 flex-1 min-h-0 min-w-0 overflow-x-hidden overscroll-contain ${
+              wide ? "overflow-y-auto md:overflow-hidden md:flex md:flex-col" : "overflow-y-auto"
+            }`}
+          >
             {children}
           </div>
 
           {/* Optional footer shadow on iOS when content stops behind home bar (visual nicety) */}
-          <div className="md:hidden pointer-events-none h-3 bg-gradient-to-t from-white to-transparent" />
+          <div className="md:hidden pointer-events-none h-3 bg-gradient-to-t from-white to-transparent shrink-0" />
         </div>
       </div>
     </div>
