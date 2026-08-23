@@ -7,6 +7,7 @@
 import { supabase } from './supabaseClient';
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { EmailAutomationView } from "./EmailAutomation";
 
 // ---- Polyfill & types for String.replaceAll (to support older TS libs) ----
 declare global {
@@ -137,7 +138,7 @@ type Task = {
   completedAtISO?: string; // ← NEW (for “Complete Task”)
 };
 
-type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset" | "master-list";
+type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset" | "master-list" | "email-automation";
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
 const LS_DEALERS = "demo_dealers";
@@ -668,6 +669,9 @@ const TopBar: React.FC<{
               {session?.role === "Admin" && (
                 <Tab label="Master List" active={route === "master-list"} onClick={() => setRoute("master-list")} />
               )}
+              {session?.role === "Admin" && (
+                <Tab label="Email Automation" active={route === "email-automation"} onClick={() => setRoute("email-automation")} />
+              )}
             </nav>
           )}
         </div>
@@ -739,6 +743,9 @@ const TopBar: React.FC<{
             )}
             {(session?.role === "Admin" || session?.role === "Manager") && (
               <MobileTab label="Reporting" active={route === "reporting"} onClick={() => setRoute("reporting")} />
+            )}
+            {session?.role === "Admin" && (
+              <MobileTab label="Email Automation" active={route === "email-automation"} onClick={() => setRoute("email-automation")} />
             )}
           </div>
         </div>
@@ -6709,6 +6716,12 @@ useEffect(() => {
     return { reporting: role === "Admin" || role === "Manager", userMgmt: role === "Admin" };
   }, [session]);
 
+  useEffect(() => {
+    if (route === "email-automation" && session?.role !== "Admin") {
+      setRoute("dealer-search");
+    }
+  }, [route, session]);
+
   const handleLogin = (s: Session) => {
     setSession(s);
     setRoute("dealer-search");
@@ -7039,6 +7052,9 @@ await syncLastVisitedFromNotes();
     showToast={showToast}
   />
 )}
+            {route === "email-automation" && session?.role === "Admin" && (
+              <EmailAutomationView showToast={showToast} />
+            )}
           </main>
         </div>
       );
