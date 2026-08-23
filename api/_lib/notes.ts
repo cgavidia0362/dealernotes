@@ -57,6 +57,18 @@ export async function enrichNotesWithDealers(notes: DealerNoteRow[]): Promise<En
   }));
 }
 
+export async function loadNotesForRange(
+  startISO: string,
+  endISO: string
+): Promise<{ notes: EnrichedNote[]; truncated: boolean }> {
+  const fetched = await fetchDealerNotes(startISO, endISO);
+  const truncated = fetched.length > MAX_NOTES;
+  const sliced = fetched.slice(0, MAX_NOTES);
+  if (!sliced.length) return { notes: [], truncated: false };
+  const notes = await enrichNotesWithDealers(sliced);
+  return { notes, truncated };
+}
+
 export function formatNotesForAi(notes: EnrichedNote[]): string[] {
   return notes.map((n) => {
     const d = n.dealer;

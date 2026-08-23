@@ -1,5 +1,5 @@
-import { formatNotesForAi, enrichNotesWithDealers, fetchDealerNotes, MAX_NOTES } from "./notes.js";
-import type { InsightsReport, InsightsResult } from "./types.js";
+import { formatNotesForAi, loadNotesForRange, MAX_NOTES } from "./notes.js";
+import type { EnrichedNote, InsightsReport, InsightsResult } from "./types.js";
 import { InsightsModelError, InsightsTimeoutError } from "./types.js";
 
 export const INSIGHTS_MODEL = "gpt-4.1-mini";
@@ -146,15 +146,15 @@ export async function callOpenAIForInsights(userContent: string): Promise<unknow
   return parsed;
 }
 
-export async function generateInsightsReport(params: {
+export async function generateInsightsFromNotes(params: {
+  notes: EnrichedNote[];
+  truncated: boolean;
   startISO: string;
   endISO: string;
   rangeLabel?: string;
 }): Promise<InsightsResult> {
   const rangeLabel = (params.rangeLabel || "").trim();
-  const fetched = await fetchDealerNotes(params.startISO, params.endISO);
-  const truncated = fetched.length > MAX_NOTES;
-  const notes = fetched.slice(0, MAX_NOTES);
+  const notes = params.notes;
 
   if (!notes.length) {
     return {
@@ -167,23 +167,37 @@ export async function generateInsightsReport(params: {
     };
   }
 
-  const enriched = await enrichNotesWithDealers(notes);
-  const formattedNotes = formatNotesForAi(enriched);
+  const formattedNotes = formatNotesForAi(notes);
   const userContent = buildInsightsPrompt({
     rangeLabel,
     startISO: params.startISO,
     endISO: params.endISO,
     noteCount: notes.length,
-    truncated,
+    truncated: params.truncated,
     formattedNotes,
   });
   const parsed = await callOpenAIForInsights(userContent);
 
   return {
     noteCount: notes.length,
-    truncated,
+    truncated: params.truncated,
     rangeLabel,
     model: INSIGHTS_MODEL,
     report: normalizeInsightsReport(parsed),
   };
+}
+
+export async function generateInsightsReport(params: {
+  startISO: string;
+  endISO: string;
+  rangeLabel?: string;
+}): Promise<InsightsResult> {
+  const loaded = await loadNotesForRange(params.startISO, params.endISO);
+  return generateInsightsFromNotes({
+    notes: loaded.notes,
+    truncated: loaded.truncated,
+    startISO: params.startISO,
+    endISO: params.endISO,
+    rangeLabel: params.rangeLabel,
+  });
 }

@@ -1,7 +1,8 @@
 // /api/weekly-report-test-email.ts
 // Admin-only manual send of the current weekly report to WEEKLY_REPORT_TEST_EMAIL.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
-import { generateInsightsReport } from "./_lib/insights.js";
+import { generateInsightsFromNotes } from "./_lib/insights.js";
+import { loadNotesForRange } from "./_lib/notes.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
 import { getWeeklyReportingRange } from "./_lib/weeklyRange.js";
 import { renderWeeklyReportEmail } from "./_lib/weeklyReportEmail.js";
@@ -46,13 +47,16 @@ export default async function handler(req: any, res: any) {
     }
 
     const window = getWeeklyReportingRange();
-    const result = await generateInsightsReport({
+    const loaded = await loadNotesForRange(window.startISO, window.endISO);
+    const result = await generateInsightsFromNotes({
+      notes: loaded.notes,
+      truncated: loaded.truncated,
       startISO: window.startISO,
       endISO: window.endISO,
       rangeLabel: window.rangeLabel,
     });
 
-    if (!result.report || !result.noteCount) {
+    if (!loaded.notes.length || !result.report) {
       return res.status(400).json({
         error: result.message || "No notes in this week’s reporting window.",
       });
@@ -60,9 +64,8 @@ export default async function handler(req: any, res: any) {
 
     const email = renderWeeklyReportEmail({
       window,
-      report: result.report,
-      noteCount: result.noteCount,
-      truncated: result.truncated,
+      glance: result.report.snapshot,
+      notes: loaded.notes,
     });
 
     const payload: Record<string, unknown> = {
