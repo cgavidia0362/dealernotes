@@ -1,4 +1,4 @@
-import type { WeeklyReportingWindow } from "./types.js";
+import { HttpError, type WeeklyReportingWindow } from "./types.js";
 
 export const REPORTING_TIMEZONE = "America/Chicago" as const;
 
@@ -127,6 +127,17 @@ function parseSendTime(value: string): { hour: number; minute: number } {
   };
 }
 
+function assertTimezone(timezone: string): string {
+  const tz = String(timezone || "").trim();
+  if (!tz) throw new HttpError(400, "timezone is required.");
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+  } catch {
+    throw new HttpError(400, "timezone is not a valid IANA timezone.");
+  }
+  return tz;
+}
+
 function makeWindow(
   timezone: string,
   start: Date,
@@ -134,6 +145,15 @@ function makeWindow(
   startLocal: string,
   endLocal: string
 ): WeeklyReportingWindow {
+  if (!(start instanceof Date) || Number.isNaN(start.getTime())) {
+    throw new HttpError(400, "Could not calculate the reporting window start.");
+  }
+  if (!(end instanceof Date) || Number.isNaN(end.getTime())) {
+    throw new HttpError(400, "Could not calculate the reporting window end.");
+  }
+  if (end.getTime() <= start.getTime()) {
+    throw new HttpError(400, "Reporting window is invalid: end must be after start.");
+  }
   return {
     timezone,
     startISO: start.toISOString(),
@@ -165,29 +185,36 @@ export function getWeeklyReportingRange(now: Date = new Date()): WeeklyReporting
 
 /**
  * Reporting window from saved automation settings.
- * week_to_send / custom_weekly: range start day 00:00 through now, or through
- * this week's send time if that moment has already passed.
- * last_7_days: rolling 7 days through now.
+ * Boundaries are computed in the saved timezone, then stored as UTC ISO.
+ * endISO is an exclusive upper bound for note queries.
+ *
+ * week_to_send: range_start_day 00:00 through current send time, or through
+ * this week's scheduled send day/time if that moment has already passed.
+ * last_7_days: previous seven days ending at the current send time.
+ * custom_weekly: not supported until a dedicated end weekday is stored.
  */
 export function getReportingWindowFromSettings(
   settings: ReportingWindowSettings,
   now: Date = new Date()
 ): WeeklyReportingWindow {
-  const timezone = settings.timezone || REPORTING_TIMEZONE;
+  const timezone = assertTimezone(settings.timezone);
   const nowParts = zoneParts(now, timezone);
 
-  if (settings.rangeType === "last_7_days") {
-    const startDay = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -7);
-    const start = zonedLocalToUtc(
-      startDay.year,
-      startDay.month,
-      startDay.day,
-      nowParts.hour,
-      nowParts.minute,
-      nowParts.second,
-      timezone
+  if (settings.rangeType === "custom_weekly") {
+    throw new HttpError(
+      400,
+      "Custom weekly range is not supported yet. It needs a dedicated end weekday, which is not stored. Use Start of week through send time or Last 7 days."
     );
-    return makeWindow(timezone, start, now, formatLocalStamp({ ...startDay, hour: nowParts.hour, minute: nowParts.minute }), formatLocalStamp(nowParts));
+  }
+
+  if (settings.rangeType === "last_7_days") {
+    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startParts = zoneParts(start, timezone);
+    return makeWindow(timezone, start, now, formatLocalStamp(startParts), formatLocalStamp(nowParts));
+  }
+
+  if (settings.rangeType !== "week_to_send") {
+    throw new HttpError(400, "rangeType is not supported.");
   }
 
   const startOffset = daysSinceWeekStart(nowParts.weekday, settings.rangeStartDay || "Monday");

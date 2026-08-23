@@ -76,7 +76,10 @@ export function EmailAutomationView({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [sendingNow, setSendingNow] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
+  const [savedRecipientCount, setSavedRecipientCount] = useState(0);
   const [recipientDraft, setRecipientDraft] = useState("");
   const [preview, setPreview] = useState<EmailPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
@@ -101,6 +104,7 @@ export function EmailAutomationView({
         if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
         setFromEmail(String(json.fromEmail || ""));
         setSchedulingActive(json.schedulingActive === true);
+        setSavedRecipientCount(Array.isArray(json.settings?.recipientEmails) ? json.settings.recipientEmails.length : 0);
       } catch (e: any) {
         if (!cancelled) showToast(e?.message || "Could not load email settings.", "error");
       } finally {
@@ -205,6 +209,7 @@ export function EmailAutomationView({
         return;
       }
       if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
+      setSavedRecipientCount(Array.isArray(json.settings?.recipientEmails) ? json.settings.recipientEmails.length : 0);
       showToast(json?.message || "Settings saved.", "success");
       await refreshPreview({ quiet: true });
     } catch (e: any) {
@@ -215,7 +220,7 @@ export function EmailAutomationView({
   };
 
   const sendTestEmail = async () => {
-    setSending(true);
+    setSendingTest(true);
     try {
       const headers = await authHeader();
       if (!headers) {
@@ -232,7 +237,34 @@ export function EmailAutomationView({
     } catch (e: any) {
       showToast(e?.message || "Test email failed.", "error");
     } finally {
-      setSending(false);
+      setSendingTest(false);
+    }
+  };
+
+  const sendReportNow = async () => {
+    setSendingNow(true);
+    try {
+      const headers = await authHeader();
+      if (!headers) {
+        showToast("Please log in again.", "error");
+        return;
+      }
+      const resp = await fetch("/api/weekly-report-send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ confirm: true }),
+      });
+      const json = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) {
+        showToast(json?.error || "Could not send the weekly report.", "error");
+        return;
+      }
+      setConfirmSend(false);
+      showToast(json?.message || "Weekly report sent.", "success");
+    } catch (e: any) {
+      showToast(e?.message || "Could not send the weekly report.", "error");
+    } finally {
+      setSendingNow(false);
     }
   };
 
@@ -339,9 +371,16 @@ export function EmailAutomationView({
               >
                 <option value="week_to_send">Start of week through send time</option>
                 <option value="last_7_days">Last 7 days</option>
-                <option value="custom_weekly">Custom weekly range</option>
+                <option value="custom_weekly" disabled>
+                  Custom weekly range (not yet supported)
+                </option>
               </select>
             </label>
+            {settings.rangeType === "custom_weekly" && (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Custom weekly range is not supported yet. It needs its own end weekday, separate from send day. Use Start of week through send time, and set Week starts on to the first day of your window.
+              </div>
+            )}
             {settings.rangeType !== "last_7_days" && (
               <label className="block text-sm">
                 <div className="text-xs text-slate-500 mb-1">Week starts on</div>
@@ -416,7 +455,7 @@ export function EmailAutomationView({
               value={settings.replyToEmail}
               onChange={(e) => setSettings((s) => ({ ...s, replyToEmail: e.target.value }))}
             />
-            <div className="text-xs text-slate-500">Optional. Replies will go here once automatic sending is turned on.</div>
+            <div className="text-xs text-slate-500">Optional. Used as Reply-To for Send Report Now. Leave blank to omit it.</div>
           </section>
 
           <section className="rounded-xl border bg-white p-4 space-y-1">
@@ -448,13 +487,21 @@ export function EmailAutomationView({
               type="button"
               className="px-3 py-2 rounded-lg text-sm font-medium border border-slate-400 text-slate-800 hover:bg-slate-50 disabled:opacity-60"
               onClick={sendTestEmail}
-              disabled={sending}
+              disabled={sendingTest || sendingNow}
             >
-              {sending ? "Sending…" : "Send Test Email"}
+              {sendingTest ? "Sending…" : "Send Test Email"}
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-900 text-white disabled:opacity-60"
+              onClick={() => setConfirmSend(true)}
+              disabled={sendingTest || sendingNow || savedRecipientCount === 0}
+            >
+              Send Report Now
             </button>
           </div>
           <div className="text-xs text-slate-500">
-            Preview uses saved settings. Save first if you changed the range, then refresh. Test email goes to the configured test inbox, not the recipient list.
+            Preview and both send actions use the last saved reporting range and timezone. Send Test Email goes only to the configured test inbox. Send Report Now goes to the saved recipient list and uses the saved Reply-To.
           </div>
         </div>
 
@@ -503,6 +550,41 @@ export function EmailAutomationView({
           </div>
         </aside>
       </div>
+
+      {confirmSend && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !sendingNow && setConfirmSend(false)} />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white shadow-xl p-5 space-y-4">
+              <div className="text-lg font-semibold text-slate-800">Send this weekly report now?</div>
+              <p className="text-sm text-slate-600">
+                Send this weekly report to {savedRecipientCount} {savedRecipientCount === 1 ? "recipient" : "recipients"} now?
+              </p>
+              <p className="text-xs text-slate-500">
+                This uses the saved recipient list, saved Reply-To, and the same email shown in the preview. It does not use the test inbox. Automatic scheduling is still off.
+              </p>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg text-sm border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  onClick={() => setConfirmSend(false)}
+                  disabled={sendingNow}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-900 text-white disabled:opacity-60"
+                  onClick={sendReportNow}
+                  disabled={sendingNow}
+                >
+                  {sendingNow ? "Sending…" : "Send Report Now"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

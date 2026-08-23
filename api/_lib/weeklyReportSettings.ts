@@ -129,6 +129,12 @@ export function parseSettingsInput(body: unknown): Omit<WeeklyReportSettings, "i
   if (!TIME_RE.test(sendTime)) throw new HttpError(400, "sendTime must be HH:MM in 24-hour format.");
   if (!isTimezone(raw.timezone)) throw new HttpError(400, "timezone is not supported.");
   if (!isRangeType(raw.rangeType)) throw new HttpError(400, "rangeType is not supported.");
+  if (raw.rangeType === "custom_weekly") {
+    throw new HttpError(
+      400,
+      "Custom weekly range is not supported yet. Choose Start of week through send time or Last 7 days."
+    );
+  }
   if (!isWeekday(raw.rangeStartDay)) throw new HttpError(400, "rangeStartDay must be a valid weekday.");
 
   const incoming = Array.isArray(raw.recipientEmails) ? raw.recipientEmails : [];
@@ -232,4 +238,28 @@ export async function saveWeeklyReportSettings(
     throw new HttpError(500, "Could not save weekly report settings.");
   }
   return mapRow(data as SettingsRow);
+}
+
+export function productionRecipients(settings: WeeklyReportSettings): string[] {
+  const emails: string[] = [];
+  for (const item of settings.recipientEmails || []) {
+    const email = normalizeEmail(String(item || ""));
+    if (!email) continue;
+    if (!isValidEmail(email)) throw new HttpError(400, `Invalid recipient email: ${email}`);
+    if (!emails.includes(email)) emails.push(email);
+  }
+  if (!emails.length) {
+    throw new HttpError(400, "Add at least one valid recipient before sending the weekly report.");
+  }
+  if (emails.length > MAX_RECIPIENTS) {
+    throw new HttpError(400, `A maximum of ${MAX_RECIPIENTS} recipients is allowed.`);
+  }
+  return emails;
+}
+
+export function productionReplyTo(settings: WeeklyReportSettings): string | null {
+  const email = normalizeEmail(settings.replyToEmail || "");
+  if (!email) return null;
+  if (!isValidEmail(email)) throw new HttpError(400, "Saved Reply-To is not a valid email address.");
+  return email;
 }
