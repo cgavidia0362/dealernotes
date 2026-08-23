@@ -92,9 +92,61 @@ function formatLocalStamp(p: { year: number; month: number; day: number; hour?: 
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(h)}:${pad2(m)}`;
 }
 
+const LONG_WEEKDAY_TO_SHORT: Record<string, string> = {
+  Monday: "Mon",
+  Tuesday: "Tue",
+  Wednesday: "Wed",
+  Thursday: "Thu",
+  Friday: "Fri",
+  Saturday: "Sat",
+  Sunday: "Sun",
+};
+
+export type ReportingWindowSettings = {
+  rangeType: string;
+  rangeStartDay: string;
+  sendDay: string;
+  sendTime: string;
+  timezone: string;
+};
+
+function daysSinceWeekStart(currentShort: string, startDay: string): number {
+  const current = WEEKDAY_TO_OFFSET[currentShort] ?? 0;
+  const startShort = LONG_WEEKDAY_TO_SHORT[startDay] || "Mon";
+  const start = WEEKDAY_TO_OFFSET[startShort] ?? 0;
+  return (current - start + 7) % 7;
+}
+
+function parseSendTime(value: string): { hour: number; minute: number } {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(value || "").trim());
+  const hour = m ? Number(m[1]) : 9;
+  const minute = m ? Number(m[2]) : 0;
+  return {
+    hour: Number.isFinite(hour) && hour >= 0 && hour <= 23 ? hour : 9,
+    minute: Number.isFinite(minute) && minute >= 0 && minute <= 59 ? minute : 0,
+  };
+}
+
+function makeWindow(
+  timezone: string,
+  start: Date,
+  end: Date,
+  startLocal: string,
+  endLocal: string
+): WeeklyReportingWindow {
+  return {
+    timezone,
+    startISO: start.toISOString(),
+    endISO: end.toISOString(),
+    startLocal,
+    endLocal,
+    rangeLabel: `${startLocal} – ${endLocal} (${timezone})`,
+  };
+}
+
 /**
- * Weekly window in America/Chicago: Monday 00:00 through `now` (exclusive upper bound).
- * Intended generation time is Saturday; preview may be called any day this week.
+ * Weekly window in America/Chicago: Monday 00:00 through `now`.
+ * Kept as the default fallback when settings are unavailable.
  */
 export function getWeeklyReportingRange(now: Date = new Date()): WeeklyReportingWindow {
   const chicagoNow = zoneParts(now, REPORTING_TIMEZONE);
@@ -102,12 +154,62 @@ export function getWeeklyReportingRange(now: Date = new Date()): WeeklyReporting
   const monday = addCalendarDays(chicagoNow.year, chicagoNow.month, chicagoNow.day, -daysSinceMonday);
   const start = zonedLocalToUtc(monday.year, monday.month, monday.day, 0, 0, 0, REPORTING_TIMEZONE);
 
-  return {
-    timezone: REPORTING_TIMEZONE,
-    startISO: start.toISOString(),
-    endISO: now.toISOString(),
-    startLocal: `${monday.year}-${pad2(monday.month)}-${pad2(monday.day)} 00:00`,
-    endLocal: formatLocalStamp(chicagoNow),
-    rangeLabel: `${monday.year}-${pad2(monday.month)}-${pad2(monday.day)} – ${chicagoNow.year}-${pad2(chicagoNow.month)}-${pad2(chicagoNow.day)} (${REPORTING_TIMEZONE})`,
-  };
+  return makeWindow(
+    REPORTING_TIMEZONE,
+    start,
+    now,
+    `${monday.year}-${pad2(monday.month)}-${pad2(monday.day)} 00:00`,
+    formatLocalStamp(chicagoNow)
+  );
+}
+
+/**
+ * Reporting window from saved automation settings.
+ * week_to_send / custom_weekly: range start day 00:00 through now, or through
+ * this week's send time if that moment has already passed.
+ * last_7_days: rolling 7 days through now.
+ */
+export function getReportingWindowFromSettings(
+  settings: ReportingWindowSettings,
+  now: Date = new Date()
+): WeeklyReportingWindow {
+  const timezone = settings.timezone || REPORTING_TIMEZONE;
+  const nowParts = zoneParts(now, timezone);
+
+  if (settings.rangeType === "last_7_days") {
+    const startDay = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -7);
+    const start = zonedLocalToUtc(
+      startDay.year,
+      startDay.month,
+      startDay.day,
+      nowParts.hour,
+      nowParts.minute,
+      nowParts.second,
+      timezone
+    );
+    return makeWindow(timezone, start, now, formatLocalStamp({ ...startDay, hour: nowParts.hour, minute: nowParts.minute }), formatLocalStamp(nowParts));
+  }
+
+  const startOffset = daysSinceWeekStart(nowParts.weekday, settings.rangeStartDay || "Monday");
+  const startCal = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -startOffset);
+  const start = zonedLocalToUtc(startCal.year, startCal.month, startCal.day, 0, 0, 0, timezone);
+
+  const sendOffset = daysSinceWeekStart(nowParts.weekday, settings.sendDay || "Saturday");
+  const sendCal = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -sendOffset);
+  const sendClock = parseSendTime(settings.sendTime);
+  const sendAt = zonedLocalToUtc(sendCal.year, sendCal.month, sendCal.day, sendClock.hour, sendClock.minute, 0, timezone);
+
+  let end = now;
+  if (sendAt.getTime() >= start.getTime() && sendAt.getTime() <= now.getTime()) {
+    end = sendAt;
+  }
+
+  const endParts = zoneParts(end, timezone);
+  return makeWindow(
+    timezone,
+    start,
+    end,
+    `${startCal.year}-${pad2(startCal.month)}-${pad2(startCal.day)} 00:00`,
+    formatLocalStamp(endParts)
+  );
 }

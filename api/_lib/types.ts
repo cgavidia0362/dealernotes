@@ -39,7 +39,7 @@ export type InsightsResult = {
 };
 
 export type WeeklyReportingWindow = {
-  timezone: "America/Chicago";
+  timezone: string;
   startISO: string;
   endISO: string;
   rangeLabel: string;

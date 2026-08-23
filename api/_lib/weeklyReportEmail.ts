@@ -17,11 +17,10 @@ export type RepNoteGroup = {
   notes: EnrichedNote[];
 };
 
-const CHICAGO = "America/Chicago";
 const MAX_GLANCE = 5;
 
-function formatChicagoDate(iso: string, opts: Intl.DateTimeFormatOptions): string {
-  return new Date(iso).toLocaleDateString("en-US", { timeZone: CHICAGO, ...opts });
+function formatWindowDate(iso: string, timeZone: string, opts: Intl.DateTimeFormatOptions): string {
+  return new Date(iso).toLocaleDateString("en-US", { timeZone, ...opts });
 }
 
 export function formatWeeklyEmailDates(window: WeeklyReportingWindow): {
@@ -30,6 +29,7 @@ export function formatWeeklyEmailDates(window: WeeklyReportingWindow): {
   startShort: string;
   endShort: string;
 } {
+  const timeZone = window.timezone || "America/Chicago";
   const longOpts: Intl.DateTimeFormatOptions = {
     weekday: "long",
     month: "long",
@@ -41,10 +41,10 @@ export function formatWeeklyEmailDates(window: WeeklyReportingWindow): {
     year: "numeric",
   };
   return {
-    startLong: formatChicagoDate(window.startISO, longOpts),
-    endLong: formatChicagoDate(window.endISO, longOpts),
-    startShort: formatChicagoDate(window.startISO, shortOpts),
-    endShort: formatChicagoDate(window.endISO, shortOpts),
+    startLong: formatWindowDate(window.startISO, timeZone, longOpts),
+    endLong: formatWindowDate(window.endISO, timeZone, longOpts),
+    startShort: formatWindowDate(window.startISO, timeZone, shortOpts),
+    endShort: formatWindowDate(window.endISO, timeZone, shortOpts),
   };
 }
 
@@ -98,8 +98,8 @@ function dealerName(note: EnrichedNote): string {
   return note.dealer?.name || "Unknown dealer";
 }
 
-function noteDateLabel(iso: string): string {
-  return formatChicagoDate(iso, { month: "short", day: "numeric" });
+function noteDateLabel(iso: string, timeZone: string): string {
+  return formatWindowDate(iso, timeZone, { month: "short", day: "numeric" });
 }
 
 function activityLine(counts: { noteCount: number; repCount: number; dealerCount: number }): string {
@@ -109,6 +109,7 @@ function activityLine(counts: { noteCount: number; repCount: number; dealerCount
 /** Week at a Glance + original rep notes. Does not render the nine-section Insights report. */
 export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): WeeklyReportEmail {
   const dates = formatWeeklyEmailDates(input.window);
+  const timeZone = input.window.timezone || "America/Chicago";
   const subject = `Dealer Note Weekly Report — ${dates.startShort} through ${dates.endShort}`;
   const period = `${dates.startLong} – ${dates.endLong}`;
   const counts = weeklyActivityCounts(input.notes);
@@ -123,7 +124,7 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
       const header = `${g.rep}\n${g.notes.length} Notes`;
       const body = g.notes
         .map((n) => {
-          const when = noteDateLabel(n.created_at);
+          const when = noteDateLabel(n.created_at, timeZone);
           const category = n.category || "Note";
           return `${dealerName(n)}\n${when} • ${category}\n\n${n.text ?? ""}`;
         })
@@ -162,7 +163,7 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
     .map((g, gi) => {
       const notesHtml = g.notes
         .map((n) => {
-          const when = noteDateLabel(n.created_at);
+          const when = noteDateLabel(n.created_at, timeZone);
           const category = n.category || "Note";
           return `<div style="margin:0 0 22px 0;">
   <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:16px;font-weight:700;line-height:1.35;color:#0f172a;">${escapeHtml(dealerName(n))}</div>

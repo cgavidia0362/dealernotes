@@ -1,11 +1,8 @@
 // /api/weekly-report-test-email.ts
 // Admin-only manual send of the current weekly report to WEEKLY_REPORT_TEST_EMAIL.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
-import { generateWeekAtAGlance } from "./_lib/insights.js";
-import { loadNotesForRange } from "./_lib/notes.js";
+import { buildWeeklyActivityReport } from "./_lib/weeklyActivity.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
-import { getWeeklyReportingRange } from "./_lib/weeklyRange.js";
-import { renderWeeklyActivityEmail } from "./_lib/weeklyReportEmail.js";
 
 export const config = { maxDuration: 60 };
 
@@ -46,34 +43,19 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "WEEKLY_REPORT_REPLY_TO is not a valid email address." });
     }
 
-    const window = getWeeklyReportingRange();
-    const loaded = await loadNotesForRange(window.startISO, window.endISO);
-    if (!loaded.notes.length) {
+    const result = await buildWeeklyActivityReport();
+    if (!result.notes.length) {
       return res.status(400).json({
         error: "No notes in this week’s reporting window.",
       });
     }
 
-    const glance = await generateWeekAtAGlance({
-      notes: loaded.notes,
-      truncated: loaded.truncated,
-      startISO: window.startISO,
-      endISO: window.endISO,
-      rangeLabel: window.rangeLabel,
-    });
-
-    const email = renderWeeklyActivityEmail({
-      window,
-      glance,
-      notes: loaded.notes,
-    });
-
     const payload: Record<string, unknown> = {
       from,
       to: [testTo],
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
+      subject: result.email.subject,
+      html: result.email.html,
+      text: result.email.text,
     };
     if (replyTo) payload.reply_to = replyTo;
 
@@ -94,6 +76,8 @@ export default async function handler(req: any, res: any) {
       ok: true,
       format: "week-at-a-glance+rep-activity",
       message: "Test email sent successfully.",
+      reportingWindow: result.window,
+      noteCount: result.counts.noteCount,
     });
   } catch (e: any) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });

@@ -1,9 +1,8 @@
 // /api/weekly-report-preview.ts
-// Admin-only preview of the weekly insights report. Does not send email or schedule.
+// Admin-only preview of the weekly email. Same path as the test email. Does not send or schedule.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
-import { generateInsightsReport, INSIGHTS_MODEL } from "./_lib/insights.js";
+import { buildWeeklyActivityReport } from "./_lib/weeklyActivity.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
-import { getWeeklyReportingRange } from "./_lib/weeklyRange.js";
 
 export const config = { maxDuration: 60 };
 
@@ -21,20 +20,27 @@ export default async function handler(req: any, res: any) {
     if (!token) return res.status(401).json({ error: "Missing Authorization Bearer token" });
     await requireAdmin(token);
 
-    const window = getWeeklyReportingRange();
-    const result = await generateInsightsReport({
-      startISO: window.startISO,
-      endISO: window.endISO,
-      rangeLabel: window.rangeLabel,
-    });
+    const result = await buildWeeklyActivityReport();
+    if (!result.notes.length) {
+      return res.status(400).json({
+        error: "No notes in this week’s reporting window.",
+        reportingWindow: result.window,
+        noteCount: 0,
+        format: "week-at-a-glance+rep-activity",
+      });
+    }
 
     return res.status(200).json({
-      reportingWindow: window,
-      report: result.report,
-      noteCount: result.noteCount,
-      model: result.model || INSIGHTS_MODEL,
+      format: "week-at-a-glance+rep-activity",
+      subject: result.email.subject,
+      html: result.email.html,
+      text: result.email.text,
+      reportingWindow: result.window,
+      noteCount: result.counts.noteCount,
+      repCount: result.counts.repCount,
+      dealerCount: result.counts.dealerCount,
       truncated: result.truncated,
-      ...(result.message ? { message: result.message } : {}),
+      schedulingActive: false,
     });
   } catch (e: any) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
