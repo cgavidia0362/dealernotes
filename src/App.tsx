@@ -942,6 +942,7 @@ const [weeklyWindow, setWeeklyWindow] = useState<WeeklyReportingWindow | null>(n
 const [weeklyMeta, setWeeklyMeta] = useState<{ noteCount: number; truncated: boolean; model?: string } | null>(null);
 const [loadingWeekly, setLoadingWeekly] = useState(false);
 const [weeklyError, setWeeklyError] = useState<string>("");
+const [sendingWeeklyEmail, setSendingWeeklyEmail] = useState(false);
 // Fetch Daily Summary notes from Supabase whenever the modal opens or filters change
 useEffect(() => {
   if (!dailyOpen) return;
@@ -1284,6 +1285,37 @@ const previewWeeklyReport = async () => {
     showToast(msg, "error");
   } finally {
     setLoadingWeekly(false);
+  }
+};
+
+const sendWeeklyTestEmail = async () => {
+  if (session?.role !== "Admin") return;
+  setSendingWeeklyEmail(true);
+  try {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) {
+      showToast("Please log in again.", "error");
+      return;
+    }
+    const resp = await fetch("/api/weekly-report-test-email", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const json = await resp.json().catch(() => ({} as any));
+    if (!resp.ok) {
+      const msg = json?.error || `Test email failed (HTTP ${resp.status})`;
+      showToast(msg, "error");
+      return;
+    }
+    showToast(json?.message || "Test email sent successfully.", "success");
+  } catch (e: any) {
+    showToast(e?.message || "Test email failed.", "error");
+  } finally {
+    setSendingWeeklyEmail(false);
   }
 };
 
@@ -2234,6 +2266,15 @@ const paged = useMemo(() => {
                   >
                     {loadingWeekly ? "Previewing…" : "Preview Weekly Report"}
                   </button>
+                  <button
+                    className="w-full md:w-auto px-3 py-2.5 rounded-lg border border-slate-400 text-slate-800 hover:bg-slate-50 disabled:opacity-60"
+                    onClick={sendWeeklyTestEmail}
+                    disabled={sendingWeeklyEmail}
+                    title="Send this week’s report to the configured test inbox. Runs only when you click."
+                    type="button"
+                  >
+                    {sendingWeeklyEmail ? "Sending…" : "Send Test Email"}
+                  </button>
                 </div>
               )}
             </div>
@@ -2274,9 +2315,9 @@ const paged = useMemo(() => {
                     summaryTab === "insights" ? "flex" : "hidden"
                   } ${showInsightsSplit ? "md:flex" : "md:hidden"} flex-col min-w-0 min-h-0 overflow-auto border rounded-xl p-3 bg-slate-50 mb-3 md:mb-0`}
                 >
-                  <div className="shrink-0 flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-800">
+                  <div className="shrink-0 flex flex-col gap-2 mb-3">
+                    <div className="min-w-0 w-full">
+                      <div className="text-sm font-semibold text-slate-800 break-words">
                         {showingWeekly && weeklyWindow
                           ? formatWeeklyReportHeading(weeklyWindow)
                           : showingWeekly
@@ -2296,7 +2337,7 @@ const paged = useMemo(() => {
                           : `${homeRangeLabel} · all reps${insightsMeta ? ` · ${insightsMeta.noteCount} notes` : ""}`}
                       </div>
                     </div>
-                    <div className="hidden md:flex flex-wrap gap-2 shrink-0">
+                    <div className="hidden md:flex flex-wrap gap-2">
                       {paneReport && (
                         <button
                           className="px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm"
@@ -2313,6 +2354,14 @@ const paged = useMemo(() => {
                         type="button"
                       >
                         {loadingWeekly ? "Previewing…" : "Preview Weekly Report"}
+                      </button>
+                      <button
+                        className="px-3 py-1.5 rounded-lg border border-slate-400 text-slate-800 hover:bg-white text-sm disabled:opacity-60"
+                        onClick={sendWeeklyTestEmail}
+                        disabled={sendingWeeklyEmail}
+                        type="button"
+                      >
+                        {sendingWeeklyEmail ? "Sending…" : "Send Test Email"}
                       </button>
                       <button
                         className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm disabled:opacity-60"
