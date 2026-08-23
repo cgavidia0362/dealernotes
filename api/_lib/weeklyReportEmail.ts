@@ -106,7 +106,8 @@ function activityLine(counts: { noteCount: number; repCount: number; dealerCount
   return `${counts.noteCount} Notes • ${counts.repCount} Reps • ${counts.dealerCount} Dealers`;
 }
 
-export function renderWeeklyReportEmail(input: WeeklyReportEmailInput): WeeklyReportEmail {
+/** Week at a Glance + original rep notes. Does not render the nine-section Insights report. */
+export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): WeeklyReportEmail {
   const dates = formatWeeklyEmailDates(input.window);
   const subject = `Dealer Note Weekly Report — ${dates.startShort} through ${dates.endShort}`;
   const period = `${dates.startLong} – ${dates.endLong}`;
@@ -191,6 +192,7 @@ export function renderWeeklyReportEmail(input: WeeklyReportEmailInput): WeeklyRe
   <title>${escapeHtml(subject)}</title>
 </head>
 <body style="margin:0;padding:0;background:#f8fafc;-webkit-text-size-adjust:100%;">
+  <!-- format:week-at-a-glance+rep-activity -->
   <div style="width:100%;background:#f8fafc;padding:20px 12px;">
     <div style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;">
       <div style="padding:24px 20px 20px 20px;border-bottom:3px solid #1e3a8a;">
@@ -223,3 +225,6 @@ export function renderWeeklyReportEmail(input: WeeklyReportEmailInput): WeeklyRe
 
   return { subject, html, text };
 }
+
+/** @deprecated Use renderWeeklyActivityEmail. Same renderer. */
+export const renderWeeklyReportEmail = renderWeeklyActivityEmail;

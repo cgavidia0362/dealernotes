@@ -1,11 +1,11 @@
 // /api/weekly-report-test-email.ts
 // Admin-only manual send of the current weekly report to WEEKLY_REPORT_TEST_EMAIL.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
-import { generateInsightsFromNotes } from "./_lib/insights.js";
+import { generateWeekAtAGlance } from "./_lib/insights.js";
 import { loadNotesForRange } from "./_lib/notes.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
 import { getWeeklyReportingRange } from "./_lib/weeklyRange.js";
-import { renderWeeklyReportEmail } from "./_lib/weeklyReportEmail.js";
+import { renderWeeklyActivityEmail } from "./_lib/weeklyReportEmail.js";
 
 export const config = { maxDuration: 60 };
 
@@ -48,7 +48,13 @@ export default async function handler(req: any, res: any) {
 
     const window = getWeeklyReportingRange();
     const loaded = await loadNotesForRange(window.startISO, window.endISO);
-    const result = await generateInsightsFromNotes({
+    if (!loaded.notes.length) {
+      return res.status(400).json({
+        error: "No notes in this week’s reporting window.",
+      });
+    }
+
+    const glance = await generateWeekAtAGlance({
       notes: loaded.notes,
       truncated: loaded.truncated,
       startISO: window.startISO,
@@ -56,15 +62,9 @@ export default async function handler(req: any, res: any) {
       rangeLabel: window.rangeLabel,
     });
 
-    if (!loaded.notes.length || !result.report) {
-      return res.status(400).json({
-        error: result.message || "No notes in this week’s reporting window.",
-      });
-    }
-
-    const email = renderWeeklyReportEmail({
+    const email = renderWeeklyActivityEmail({
       window,
-      glance: result.report.snapshot,
+      glance,
       notes: loaded.notes,
     });
 
@@ -92,6 +92,7 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({
       ok: true,
+      format: "week-at-a-glance+rep-activity",
       message: "Test email sent successfully.",
     });
   } catch (e: any) {

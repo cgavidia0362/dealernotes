@@ -201,3 +201,98 @@ export async function generateInsightsReport(params: {
     rangeLabel: params.rangeLabel,
   });
 }
+
+const WEEK_AT_A_GLANCE_PROMPT = `You write a short executive weekly summary for an auto finance / dealer lending team.
+Reps visit dealerships and write field notes.
+
+Rules:
+- Use ONLY the notes provided. Do not invent dealers, lenders, quotes, or reasons.
+- Return 4 or 5 concise bullets. Never more than 5. Never fewer than 4 unless the notes truly support fewer.
+- Focus on the most important themes: major dealer feedback, opportunities, problems, competitive activity, or follow-up items.
+- Neutral, concise, easy to scan. No preamble, no markdown, no section headings.
+
+Return a JSON object with exactly this shape:
+{ "bullets": ["...", "..."] }`;
+
+export async function generateWeekAtAGlance(params: {
+  notes: EnrichedNote[];
+  truncated: boolean;
+  startISO: string;
+  endISO: string;
+  rangeLabel?: string;
+}): Promise<string[]> {
+  if (!params.notes.length) return [];
+
+  const formattedNotes = formatNotesForAi(params.notes);
+  const userContent = buildInsightsPrompt({
+    rangeLabel: params.rangeLabel || "",
+    startISO: params.startISO,
+    endISO: params.endISO,
+    noteCount: params.notes.length,
+    truncated: params.truncated,
+    formattedNotes,
+  });
+
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) throw new Error("OPENAI_API_KEY is not configured.");
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 50000);
+  let aiResp: Response;
+  try {
+    aiResp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal: ac.signal,
+      headers: {
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: INSIGHTS_MODEL,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: WEEK_AT_A_GLANCE_PROMPT },
+          { role: "user", content: userContent },
+        ],
+      }),
+    });
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new InsightsTimeoutError();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!aiResp.ok) {
+    throw new InsightsModelError("Insight model request failed. Try again.");
+  }
+
+  const aiJson = (await aiResp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = String(aiJson?.choices?.[0]?.message?.content || "").trim();
+  if (!content) {
+    throw new InsightsModelError("Insight model returned an empty response.");
+  }
+
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    const m = content.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        parsed = JSON.parse(m[0]);
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new InsightsModelError("Insight model returned invalid JSON.");
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const raw = Array.isArray(obj.bullets) ? obj.bullets : Array.isArray(obj.snapshot) ? obj.snapshot : [];
+  const bullets = raw.map((x) => String(x).trim()).filter(Boolean).slice(0, 5);
+  return bullets;
+}
