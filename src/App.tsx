@@ -1150,7 +1150,7 @@ const generateHomeInsights = async () => {
     });
     const json = await resp.json().catch(() => ({} as any));
     if (!resp.ok) {
-      const msg = json?.error || "Insights failed.";
+      const msg = json?.error || `Insights failed (HTTP ${resp.status})`;
       setInsightsError(msg);
       showToast(msg, "error");
       return;

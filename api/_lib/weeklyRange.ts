@@ -1,4 +1,4 @@
-import type { WeeklyReportingWindow } from "./types";
+import type { WeeklyReportingWindow } from "./types.js";
 
 export const REPORTING_TIMEZONE = "America/Chicago" as const;
 

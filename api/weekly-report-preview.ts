@@ -1,9 +1,9 @@
 // /api/weekly-report-preview.ts
 // Admin-only preview of the weekly insights report. Does not send email or schedule.
-import { getBearerToken, requireAdmin } from "../lib/server/authAdmin";
-import { generateInsightsReport, INSIGHTS_MODEL } from "../lib/server/insights";
-import { HttpError, InsightsModelError, InsightsTimeoutError } from "../lib/server/types";
-import { getWeeklyReportingRange } from "../lib/server/weeklyRange";
+import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
+import { generateInsightsReport, INSIGHTS_MODEL } from "./_lib/insights.js";
+import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
+import { getWeeklyReportingRange } from "./_lib/weeklyRange.js";
 
 export const config = { maxDuration: 60 };
 

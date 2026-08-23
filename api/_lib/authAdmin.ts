@@ -1,5 +1,5 @@
-import { HttpError } from "./types";
-import { getSupabaseAdmin } from "./supabaseAdmin";
+import { HttpError } from "./types.js";
+import { getSupabaseAdmin } from "./supabaseAdmin.js";
 
 export function getBearerToken(req: { headers?: Record<string, unknown> }): string | null {
   const raw = req.headers?.authorization ?? req.headers?.Authorization ?? "";

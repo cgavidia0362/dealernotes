@@ -1,6 +1,6 @@
-import { formatNotesForAi, enrichNotesWithDealers, fetchDealerNotes, MAX_NOTES } from "./notes";
-import type { InsightsReport, InsightsResult } from "./types";
-import { InsightsModelError, InsightsTimeoutError } from "./types";
+import { formatNotesForAi, enrichNotesWithDealers, fetchDealerNotes, MAX_NOTES } from "./notes.js";
+import type { InsightsReport, InsightsResult } from "./types.js";
+import { InsightsModelError, InsightsTimeoutError } from "./types.js";
 
 export const INSIGHTS_MODEL = "gpt-4.1-mini";
 

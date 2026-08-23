@@ -1,8 +1,8 @@
 // /api/ai-insights.ts
 // Admin-only, on-demand market insights over dealer_notes in a date range.
-import { getBearerToken, requireAdmin } from "../lib/server/authAdmin";
-import { generateInsightsReport, INSIGHTS_MODEL } from "../lib/server/insights";
-import { HttpError, InsightsModelError, InsightsTimeoutError } from "../lib/server/types";
+import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
+import { generateInsightsReport, INSIGHTS_MODEL } from "./_lib/insights.js";
+import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
 
 export const config = { maxDuration: 60 };
 

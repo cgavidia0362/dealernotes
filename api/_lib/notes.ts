@@ -1,5 +1,5 @@
-import type { DealerInfo, DealerNoteRow, EnrichedNote } from "./types";
-import { getSupabaseAdmin } from "./supabaseAdmin";
+import type { DealerInfo, DealerNoteRow, EnrichedNote } from "./types.js";
+import { getSupabaseAdmin } from "./supabaseAdmin.js";
 
 export const MAX_NOTES = 400;
 export const MAX_NOTE_CHARS = 1500;
