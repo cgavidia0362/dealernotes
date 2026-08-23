@@ -119,6 +119,15 @@ type InsightsReport = {
   watchItems: string[];
 };
 
+type WeeklyReportingWindow = {
+  timezone: string;
+  startISO: string;
+  endISO: string;
+  rangeLabel: string;
+  startLocal: string;
+  endLocal: string;
+};
+
 type Task = {
   id: string;
   dealerId: string;
@@ -444,6 +453,18 @@ function formatInsightsPlainText(
     lines.push("");
   }
   return lines.join("\n").trim();
+}
+
+function formatWeeklyReportHeading(window: WeeklyReportingWindow): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: "America/Chicago",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  };
+  const start = new Date(window.startISO).toLocaleDateString("en-US", opts);
+  const end = new Date(window.endISO).toLocaleDateString("en-US", opts);
+  return `Weekly Report: ${start} – ${end}`;
 }
 
 /* ------------------------------- UI Shell --------------------------------- */
@@ -915,6 +936,12 @@ const [insights, setInsights] = useState<InsightsReport | null>(null);
 const [insightsMeta, setInsightsMeta] = useState<{ noteCount: number; truncated: boolean } | null>(null);
 const [loadingInsights, setLoadingInsights] = useState(false);
 const [insightsError, setInsightsError] = useState<string>("");
+const [insightsView, setInsightsView] = useState<"range" | "weekly">("range");
+const [weeklyReport, setWeeklyReport] = useState<InsightsReport | null>(null);
+const [weeklyWindow, setWeeklyWindow] = useState<WeeklyReportingWindow | null>(null);
+const [weeklyMeta, setWeeklyMeta] = useState<{ noteCount: number; truncated: boolean; model?: string } | null>(null);
+const [loadingWeekly, setLoadingWeekly] = useState(false);
+const [weeklyError, setWeeklyError] = useState<string>("");
 // Fetch Daily Summary notes from Supabase whenever the modal opens or filters change
 useEffect(() => {
   if (!dailyOpen) return;
@@ -1043,6 +1070,15 @@ useEffect(() => {
   setInsightsError("");
 }, [summaryRange, startDate, endDate]);
 
+useEffect(() => {
+  if (dailyOpen) return;
+  setWeeklyReport(null);
+  setWeeklyWindow(null);
+  setWeeklyMeta(null);
+  setWeeklyError("");
+  setInsightsView("range");
+}, [dailyOpen]);
+
 // Fetch missing dealers for Daily Summary notes (handles renamed dealers)
 useEffect(() => {
   if (!dailyOpen || homeSummaryNotes.length === 0) return;
@@ -1127,6 +1163,7 @@ const generateHomeInsights = async () => {
     showToast("Pick a date range first.", "error");
     return;
   }
+  setInsightsView("range");
   setLoadingInsights(true);
   setInsightsError("");
   try {
@@ -1176,11 +1213,78 @@ const generateHomeInsights = async () => {
 };
 
 const copyHomeInsights = async () => {
+  if (insightsView === "weekly") {
+    if (!weeklyReport || !weeklyMeta || !weeklyWindow) return;
+    await navigator.clipboard.writeText(
+      formatInsightsPlainText(
+        weeklyReport,
+        formatWeeklyReportHeading(weeklyWindow),
+        weeklyMeta.noteCount,
+        weeklyMeta.truncated
+      )
+    );
+    showToast("Weekly report copied.", "success");
+    return;
+  }
   if (!insights || !insightsMeta) return;
   await navigator.clipboard.writeText(
     formatInsightsPlainText(insights, homeRangeLabel, insightsMeta.noteCount, insightsMeta.truncated)
   );
   showToast("Insights copied.", "success");
+};
+
+const previewWeeklyReport = async () => {
+  if (session?.role !== "Admin") return;
+  setInsightsView("weekly");
+  setSummaryTab("insights");
+  setLoadingWeekly(true);
+  setWeeklyError("");
+  try {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) {
+      showToast("Please log in again.", "error");
+      return;
+    }
+    const resp = await fetch("/api/weekly-report-preview", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const json = await resp.json().catch(() => ({} as any));
+    if (!resp.ok) {
+      const msg = json?.error || `Weekly preview failed (HTTP ${resp.status})`;
+      setWeeklyReport(null);
+      setWeeklyWindow(null);
+      setWeeklyMeta(null);
+      setWeeklyError(msg);
+      showToast(msg, "error");
+      return;
+    }
+    if (json.reportingWindow) setWeeklyWindow(json.reportingWindow as WeeklyReportingWindow);
+    setWeeklyMeta({
+      noteCount: Number(json.noteCount) || 0,
+      truncated: !!json.truncated,
+      model: json.model ? String(json.model) : undefined,
+    });
+    if (!json.report || !json.noteCount) {
+      setWeeklyReport(null);
+      const msg = json?.message || "No notes in this week’s reporting window.";
+      setWeeklyError(msg);
+      showToast(msg, "error");
+      return;
+    }
+    setWeeklyReport(json.report as InsightsReport);
+  } catch (e: any) {
+    const msg = e?.message || "Weekly preview failed.";
+    setWeeklyReport(null);
+    setWeeklyError(msg);
+    showToast(msg, "error");
+  } finally {
+    setLoadingWeekly(false);
+  }
 };
 
   // helpers
@@ -1416,7 +1520,19 @@ const paged = useMemo(() => {
   const fmtDateTime = (iso: string) => new Date(iso).toLocaleString();
   const dealerById = (id: string) => dealers.find((d) => d.id === id);
   const isAdmin = session?.role === "Admin";
-  const showInsightsSplit = isAdmin && (loadingInsights || !!insights || !!insightsError);
+  const showingWeekly = insightsView === "weekly";
+  const paneReport = showingWeekly ? weeklyReport : insights;
+  const paneMeta = showingWeekly ? weeklyMeta : insightsMeta;
+  const paneError = showingWeekly ? weeklyError : insightsError;
+  const paneLoading = showingWeekly ? loadingWeekly : loadingInsights;
+  const showInsightsSplit =
+    isAdmin &&
+    (loadingInsights ||
+      !!insights ||
+      !!insightsError ||
+      loadingWeekly ||
+      !!weeklyReport ||
+      !!weeklyError);
   const summaryNoteCards = (
     <div className="space-y-3 min-w-0">
       {loadingHomeSummary && <div className="text-sm text-slate-500">Loading…</div>}
@@ -1467,21 +1583,27 @@ const paged = useMemo(() => {
   );
   const insightsBody = (
     <div className="min-w-0">
-      {loadingInsights && (
-        <div className="text-sm text-slate-500">Reading notes and generating the report…</div>
-      )}
-      {!loadingInsights && insightsError && !insights && (
-        <div className="text-sm text-slate-600 break-words">{insightsError}</div>
-      )}
-      {!loadingInsights && insightsMeta?.truncated && (
-        <div className="text-xs text-amber-700 mb-2">
-          Range was large — analyzed the most recent {insightsMeta.noteCount} notes.
+      {paneLoading && (
+        <div className="text-sm text-slate-500">
+          {showingWeekly
+            ? "Building this week’s report from Monday through now…"
+            : "Reading notes and generating the report…"}
         </div>
       )}
-      {!loadingInsights && insights && <InsightReportView report={insights} />}
-      {!loadingInsights && !insights && !insightsError && (
+      {!paneLoading && paneError && !paneReport && (
+        <div className="text-sm text-slate-600 break-words">{paneError}</div>
+      )}
+      {!paneLoading && paneMeta?.truncated && (
+        <div className="text-xs text-amber-700 mb-2">
+          Range was large — analyzed the most recent {paneMeta.noteCount} notes.
+        </div>
+      )}
+      {!paneLoading && paneReport && <InsightReportView report={paneReport} />}
+      {!paneLoading && !paneReport && !paneError && (
         <div className="text-sm text-slate-500">
-          Pick a date range, then generate a market report from every rep’s notes. Nothing runs until you click.
+          {showingWeekly
+            ? "Click Preview Weekly Report to see this week’s briefing. Nothing runs until you click."
+            : "Pick a date range, then generate a market report from every rep’s notes. Nothing runs until you click."}
         </div>
       )}
     </div>
@@ -2093,15 +2215,26 @@ const paged = useMemo(() => {
               </div>
 
               {isAdmin && (
-                <button
-                  className={`${showInsightsSplit ? "md:hidden" : ""} w-full md:w-auto px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60`}
-                  onClick={generateHomeInsights}
-                  disabled={loadingInsights}
-                  title="Analyzes all reps in this date range. Runs only when you click."
-                  type="button"
-                >
-                  {loadingInsights ? "Generating…" : "Generate Insights"}
-                </button>
+                <div className={`${showInsightsSplit ? "md:hidden" : ""} flex flex-col sm:flex-row gap-2`}>
+                  <button
+                    className="w-full md:w-auto px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-60"
+                    onClick={generateHomeInsights}
+                    disabled={loadingInsights}
+                    title="Analyzes all reps in this date range. Runs only when you click."
+                    type="button"
+                  >
+                    {loadingInsights ? "Generating…" : "Generate Insights"}
+                  </button>
+                  <button
+                    className="w-full md:w-auto px-3 py-2.5 rounded-lg border border-indigo-600 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                    onClick={previewWeeklyReport}
+                    disabled={loadingWeekly}
+                    title="Preview this week’s report (Monday through now, Central Time). Runs only when you click."
+                    type="button"
+                  >
+                    {loadingWeekly ? "Previewing…" : "Preview Weekly Report"}
+                  </button>
+                </div>
               )}
             </div>
 
@@ -2143,14 +2276,28 @@ const paged = useMemo(() => {
                 >
                   <div className="shrink-0 flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-800">Market Insights</div>
+                      <div className="text-sm font-semibold text-slate-800">
+                        {showingWeekly && weeklyWindow
+                          ? formatWeeklyReportHeading(weeklyWindow)
+                          : showingWeekly
+                            ? "Weekly Report"
+                            : "Market Insights"}
+                      </div>
                       <div className="text-xs text-slate-500 break-words">
-                        {homeRangeLabel} · all reps
-                        {insightsMeta ? ` · ${insightsMeta.noteCount} notes` : ""}
+                        {showingWeekly
+                          ? [
+                              weeklyWindow ? "America/Chicago · all reps" : "Monday through now · all reps",
+                              paneMeta ? `${paneMeta.noteCount} notes` : null,
+                              paneMeta?.truncated ? "truncated" : null,
+                              weeklyMeta?.model || null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")
+                          : `${homeRangeLabel} · all reps${insightsMeta ? ` · ${insightsMeta.noteCount} notes` : ""}`}
                       </div>
                     </div>
                     <div className="hidden md:flex flex-wrap gap-2 shrink-0">
-                      {insights && (
+                      {paneReport && (
                         <button
                           className="px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm"
                           onClick={copyHomeInsights}
@@ -2160,6 +2307,14 @@ const paged = useMemo(() => {
                         </button>
                       )}
                       <button
+                        className="px-3 py-1.5 rounded-lg border border-indigo-600 text-indigo-700 hover:bg-indigo-50 text-sm disabled:opacity-60"
+                        onClick={previewWeeklyReport}
+                        disabled={loadingWeekly}
+                        type="button"
+                      >
+                        {loadingWeekly ? "Previewing…" : "Preview Weekly Report"}
+                      </button>
+                      <button
                         className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm disabled:opacity-60"
                         onClick={generateHomeInsights}
                         disabled={loadingInsights}
@@ -2168,7 +2323,7 @@ const paged = useMemo(() => {
                         {loadingInsights ? "Generating…" : "Generate Insights"}
                       </button>
                     </div>
-                    {insights && (
+                    {paneReport && (
                       <button
                         className="md:hidden px-3 py-1.5 rounded-lg border text-slate-700 hover:bg-white text-sm self-start"
                         onClick={copyHomeInsights}
