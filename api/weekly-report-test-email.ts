@@ -57,7 +57,7 @@ export default async function handler(req: any, res: any) {
       noteCount: result.counts.noteCount,
     });
   } catch (e: any) {
-    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.details || {}) });
     if (e instanceof InsightsTimeoutError) return res.status(504).json({ error: e.message });
     if (e instanceof InsightsModelError) return res.status(502).json({ error: e.message });
     return res.status(500).json({ error: e?.message || "Server error" });

@@ -61,7 +61,7 @@ export default async function handler(req: any, res: any) {
       schedulingActive: false,
     });
   } catch (e: any) {
-    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
+    if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.details || {}) });
     if (e instanceof SyntaxError) return res.status(400).json({ error: "Invalid JSON body." });
     if (e instanceof InsightsTimeoutError) return res.status(504).json({ error: e.message });
     if (e instanceof InsightsModelError) return res.status(502).json({ error: e.message });

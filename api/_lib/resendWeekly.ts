@@ -10,6 +10,40 @@ export function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || /<[^@\s]+@[^@\s]+\.[^@\s]+>/.test(value);
 }
 
+function senderDomain(from: string): string {
+  const m = /@([^>\s]+)/.exec(String(from || ""));
+  return (m?.[1] || "").toLowerCase();
+}
+
+function readProviderError(raw: unknown): { type?: string; message?: string } {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const nested = obj.error && typeof obj.error === "object" ? (obj.error as Record<string, unknown>) : null;
+  const type = String(obj.name || obj.type || nested?.name || nested?.type || "").trim() || undefined;
+  const message = String(obj.message || nested?.message || "").trim() || undefined;
+  return { type, message };
+}
+
+function humanProviderMessage(opts: {
+  from: string;
+  status: number;
+  providerType?: string;
+  providerMessage?: string;
+}): string {
+  const domain = senderDomain(opts.from);
+  const providerText = `${opts.providerMessage || ""} ${opts.providerType || ""}`.toLowerCase();
+  const testingOnly =
+    domain === "resend.dev" ||
+    providerText.includes("only send testing emails") ||
+    providerText.includes("verify a domain");
+
+  if (testingOnly && opts.status === 403) {
+    return "Resend blocked this send because the From address is on resend.dev. That test sender can only email the Resend account owner. Verify your own domain in Resend, then set WEEKLY_REPORT_FROM_EMAIL to an address on that domain.";
+  }
+  if (opts.providerMessage) return opts.providerMessage;
+  return "Email provider failed. Check Resend configuration.";
+}
+
 export async function sendResendEmail(opts: {
   from: string;
   to: string[];
@@ -45,7 +79,28 @@ export async function sendResendEmail(opts: {
     body: JSON.stringify(payload),
   });
 
-  if (!sendResp.ok) {
-    throw new HttpError(502, "Email provider failed. Check Resend configuration.");
-  }
+  if (sendResp.ok) return;
+
+  const raw = await sendResp.json().catch(() => null);
+  const parsed = readProviderError(raw);
+  console.error("[resend] send failed", {
+    status: sendResp.status,
+    providerType: parsed.type || null,
+    providerMessage: parsed.message || null,
+    fromDomain: senderDomain(opts.from) || null,
+    recipientCount: opts.to.length,
+    hasReplyTo: Boolean(opts.replyTo),
+  });
+
+  const status = sendResp.status >= 400 && sendResp.status < 500 ? sendResp.status : 502;
+  throw new HttpError(status, humanProviderMessage({
+    from: opts.from,
+    status: sendResp.status,
+    providerType: parsed.type,
+    providerMessage: parsed.message,
+  }), {
+    providerStatus: sendResp.status,
+    providerType: parsed.type || null,
+    providerMessage: parsed.message || null,
+  });
 }
