@@ -14,6 +14,16 @@ type WeeklyReportSettings = {
   replyToEmail: string;
 };
 
+type RecentRun = {
+  id: string;
+  source: "scheduled" | "manual";
+  status: "pending" | "sending" | "sent" | "failed" | "skipped";
+  scheduledFor: string;
+  sentAt: string | null;
+  recipientCount: number | null;
+  errorMessage: string | null;
+};
+
 type EmailPreview = {
   subject: string;
   html: string;
@@ -59,6 +69,33 @@ async function authHeader(): Promise<HeadersInit | null> {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
+function formatWhen(iso: string | null | undefined, timeZone: string): string {
+  if (!iso) return "Never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Never";
+  const zone = timeZone || "America/Chicago";
+  const datePart = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(d);
+  const timePart = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+  return `${datePart} at ${timePart}`;
+}
+
+function statusLabel(status: RecentRun["status"]): string {
+  if (status === "sent") return "Sent";
+  if (status === "failed") return "Failed";
+  if (status === "skipped") return "Skipped";
+  if (status === "sending") return "Sending";
+  return "Pending";
+}
+
 function rangeLabel(settings: WeeklyReportSettings): string {
   if (settings.rangeType === "last_7_days") return "Last 7 days";
   if (settings.rangeType === "custom_weekly") return `Custom week starting ${settings.rangeStartDay}`;
@@ -72,7 +109,6 @@ export function EmailAutomationView({
 }) {
   const [settings, setSettings] = useState<WeeklyReportSettings>(emptySettings());
   const [fromEmail, setFromEmail] = useState("");
-  const [schedulingActive, setSchedulingActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -83,6 +119,9 @@ export function EmailAutomationView({
   const [recipientDraft, setRecipientDraft] = useState("");
   const [preview, setPreview] = useState<EmailPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
+  const [lastSent, setLastSent] = useState<string | null>(null);
+  const [nextScheduled, setNextScheduled] = useState<string | null>(null);
+  const [recentRuns, setRecentRuns] = useState<RecentRun[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +142,9 @@ export function EmailAutomationView({
         if (cancelled) return;
         if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
         setFromEmail(String(json.fromEmail || ""));
-        setSchedulingActive(json.schedulingActive === true);
+        setLastSent(json.lastSent || null);
+        setNextScheduled(json.nextScheduled || null);
+        setRecentRuns(Array.isArray(json.recentRuns) ? json.recentRuns : []);
         setSavedRecipientCount(Array.isArray(json.settings?.recipientEmails) ? json.settings.recipientEmails.length : 0);
       } catch (e: any) {
         if (!cancelled) showToast(e?.message || "Could not load email settings.", "error");
@@ -118,10 +159,36 @@ export function EmailAutomationView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const applySettingsPayload = (json: any) => {
+    if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
+    if (json.fromEmail !== undefined) setFromEmail(String(json.fromEmail || ""));
+    if ("lastSent" in json) setLastSent(json.lastSent || null);
+    if ("nextScheduled" in json) setNextScheduled(json.nextScheduled || null);
+    if (Array.isArray(json.recentRuns)) setRecentRuns(json.recentRuns);
+    if (Array.isArray(json.settings?.recipientEmails)) {
+      setSavedRecipientCount(json.settings.recipientEmails.length);
+    }
+  };
+
+  const refreshStatus = async () => {
+    const headers = await authHeader();
+    if (!headers) return;
+    const resp = await fetch("/api/weekly-report-settings", { headers });
+    const json = await resp.json().catch(() => ({} as any));
+    if (resp.ok) applySettingsPayload(json);
+  };
+
   const statusLine = useMemo(() => {
-    const on = settings.enabled ? "Enabled (not sending yet)" : "Disabled";
+    const on = settings.enabled ? "Automation Enabled" : "Automation Disabled";
     return `${on} · ${settings.sendDay} at ${settings.sendTime} · ${settings.timezone}`;
   }, [settings]);
+
+  const lastSentLabel = lastSent ? formatWhen(lastSent, settings.timezone) : "Never";
+  const nextScheduledLabel = !settings.enabled
+    ? "Disabled"
+    : nextScheduled
+      ? formatWhen(nextScheduled, settings.timezone)
+      : "Disabled";
 
   const addRecipient = () => {
     const email = recipientDraft.trim().toLowerCase();
@@ -208,8 +275,7 @@ export function EmailAutomationView({
         showToast(json?.error || "Could not save settings.", "error");
         return;
       }
-      if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
-      setSavedRecipientCount(Array.isArray(json.settings?.recipientEmails) ? json.settings.recipientEmails.length : 0);
+      applySettingsPayload(json);
       showToast(json?.message || "Settings saved.", "success");
       await refreshPreview({ quiet: true });
     } catch (e: any) {
@@ -261,6 +327,7 @@ export function EmailAutomationView({
       }
       setConfirmSend(false);
       showToast(json?.message || "Weekly report sent.", "success");
+      await refreshStatus();
     } catch (e: any) {
       showToast(e?.message || "Could not send the weekly report.", "error");
     } finally {
@@ -277,7 +344,7 @@ export function EmailAutomationView({
       <div>
         <div className="text-xl font-semibold text-slate-800">Email Automation</div>
         <div className="text-sm text-slate-500 mt-1">
-          Control weekly report settings here. Automatic sending is not active yet.
+          Control weekly report settings here. Automatic sending follows the schedule you save.
         </div>
       </div>
 
@@ -289,14 +356,16 @@ export function EmailAutomationView({
             <div className="text-sm text-slate-600">
               {settings.recipientEmails.length} {settings.recipientEmails.length === 1 ? "recipient" : "recipients"} · {rangeLabel(settings)}
             </div>
-            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-              Last sent: not available yet
-              <br />
-              Next scheduled: not available yet
-              <br />
-              {schedulingActive
-                ? "Automatic sending is on."
-                : "Scheduling is not active yet. Saving these settings will not send automatic emails."}
+            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 space-y-1">
+              <div>Last sent: {lastSentLabel}</div>
+              <div>Next scheduled: {nextScheduledLabel}</div>
+              {settings.enabled ? (
+                <div className="text-slate-500">
+                  Automatic sending is on. The platform checks this schedule once per day, so the email may go out later than the exact time you chose.
+                </div>
+              ) : (
+                <div className="text-slate-500">Automatic sending is disabled.</div>
+              )}
             </div>
           </section>
 
@@ -311,8 +380,38 @@ export function EmailAutomationView({
               />
               Automatic Reports Enabled
             </label>
-            <div className="text-xs text-slate-500">This only saves your preference. It does not turn on a schedule.</div>
+            <div className="text-xs text-slate-500">When enabled, the weekly report sends automatically on the saved day and time.</div>
           </section>
+
+          {recentRuns.length > 0 && (
+            <section className="rounded-xl border bg-white p-4 space-y-2">
+              <div className="text-sm font-semibold text-slate-800">Recent activity</div>
+              <div className="divide-y divide-slate-100">
+                {recentRuns.slice(0, 5).map((run) => (
+                  <div key={run.id} className="py-2 first:pt-0 last:pb-0 text-xs text-slate-600 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="font-medium text-slate-800">{statusLabel(run.status)}</span>
+                      <span>·</span>
+                      <span>{run.source === "manual" ? "Manual" : "Scheduled"}</span>
+                      {run.recipientCount != null && (
+                        <>
+                          <span>·</span>
+                          <span>
+                            {run.recipientCount} {run.recipientCount === 1 ? "recipient" : "recipients"}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <div>Scheduled: {formatWhen(run.scheduledFor, settings.timezone)}</div>
+                    {run.sentAt && <div>Sent: {formatWhen(run.sentAt, settings.timezone)}</div>}
+                    {run.status === "failed" && run.errorMessage && (
+                      <div className="text-red-700">{run.errorMessage}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="rounded-xl border bg-white p-4 space-y-3">
             <div className="text-sm font-semibold text-slate-800">Schedule</div>
@@ -561,7 +660,7 @@ export function EmailAutomationView({
                 Send this weekly report to {savedRecipientCount} {savedRecipientCount === 1 ? "recipient" : "recipients"} now?
               </p>
               <p className="text-xs text-slate-500">
-                This uses the saved recipient list, saved Reply-To, and the same email shown in the preview. It does not use the test inbox. Automatic scheduling is still off.
+                This uses the saved recipient list, saved Reply-To, and the same email shown in the preview. It does not use the test inbox. A manual send does not replace the scheduled weekly send.
               </p>
               <div className="flex flex-wrap justify-end gap-2">
                 <button

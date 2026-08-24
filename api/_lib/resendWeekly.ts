@@ -51,7 +51,7 @@ export async function sendResendEmail(opts: {
   subject: string;
   html: string;
   text: string;
-}): Promise<void> {
+}): Promise<{ id: string | null }> {
   const resendKey = requiredEnv("RESEND_API_KEY");
   if (!opts.to.length) throw new HttpError(400, "No recipients to send to.");
   if (!looksLikeEmail(opts.from)) {
@@ -79,7 +79,10 @@ export async function sendResendEmail(opts: {
     body: JSON.stringify(payload),
   });
 
-  if (sendResp.ok) return;
+  if (sendResp.ok) {
+    const okJson = (await sendResp.json().catch(() => null)) as { id?: string; data?: { id?: string } } | null;
+    return { id: okJson?.id || okJson?.data?.id || null };
+  }
 
   const raw = await sendResp.json().catch(() => null);
   const parsed = readProviderError(raw);

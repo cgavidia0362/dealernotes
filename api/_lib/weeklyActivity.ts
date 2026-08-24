@@ -20,15 +20,18 @@ export type WeeklyActivityReport = {
 };
 
 /** Shared weekly-email path: notes → glance → view model → renderer. */
-export async function buildWeeklyActivityReport(): Promise<WeeklyActivityReport> {
+export async function buildWeeklyActivityReport(opts?: { asOf?: Date }): Promise<WeeklyActivityReport> {
   const settings = await loadWeeklyReportSettings();
-  const window = getReportingWindowFromSettings({
+  const rangeSettings = {
     rangeType: settings.rangeType,
     rangeStartDay: settings.rangeStartDay,
     sendDay: settings.sendDay,
     sendTime: settings.sendTime,
     timezone: settings.timezone,
-  });
+  };
+  const window = opts?.asOf
+    ? getReportingWindowFromSettings(rangeSettings, opts.asOf)
+    : getReportingWindowFromSettings(rangeSettings);
   const loaded = await loadNotesForRange(window.startISO, window.endISO);
   const glance = loaded.notes.length
     ? await generateWeekAtAGlance({

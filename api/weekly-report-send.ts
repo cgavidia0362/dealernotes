@@ -1,9 +1,10 @@
 // /api/weekly-report-send.ts
-// Admin-only manual production send to saved recipient_emails. No scheduler.
+// Admin-only manual production send to saved recipient_emails. Independent of scheduled uniqueness.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
 import { looksLikeEmail, requiredEnv, sendResendEmail } from "./_lib/resendWeekly.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
 import { buildWeeklyActivityReport } from "./_lib/weeklyActivity.js";
+import { recordManualRun } from "./_lib/weeklyReportRuns.js";
 import { loadWeeklyReportSettings, productionRecipients, productionReplyTo } from "./_lib/weeklyReportSettings.js";
 
 export const config = { maxDuration: 60 };
@@ -42,13 +43,33 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    await sendResendEmail({
-      from,
-      to,
-      replyTo,
-      subject: result.email.subject,
-      html: result.email.html,
-      text: result.email.text,
+    let sent: { id: string | null };
+    try {
+      sent = await sendResendEmail({
+        from,
+        to,
+        replyTo,
+        subject: result.email.subject,
+        html: result.email.html,
+        text: result.email.text,
+      });
+    } catch (e: any) {
+      await recordManualRun({
+        status: "failed",
+        reportStart: result.window.startISO,
+        reportEnd: result.window.endISO,
+        recipientCount: to.length,
+        errorMessage: e instanceof HttpError ? e.message : e?.message || "Send failed.",
+      });
+      throw e;
+    }
+
+    await recordManualRun({
+      status: "sent",
+      reportStart: result.window.startISO,
+      reportEnd: result.window.endISO,
+      recipientCount: to.length,
+      resendMessageId: sent.id,
     });
 
     return res.status(200).json({
@@ -58,7 +79,7 @@ export default async function handler(req: any, res: any) {
       recipientCount: to.length,
       reportingWindow: result.window,
       noteCount: result.counts.noteCount,
-      schedulingActive: false,
+      schedulingActive: true,
     });
   } catch (e: any) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.details || {}) });

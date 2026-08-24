@@ -12,7 +12,7 @@ type ZoneParts = {
   weekday: string;
 };
 
-const WEEKDAY_TO_OFFSET: Record<string, number> = {
+export const WEEKDAY_TO_OFFSET: Record<string, number> = {
   Mon: 0,
   Tue: 1,
   Wed: 2,
@@ -26,7 +26,7 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-function zoneParts(date: Date, timeZone: string): ZoneParts {
+export function zoneParts(date: Date, timeZone: string): ZoneParts {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone,
     weekday: "short",
@@ -77,7 +77,7 @@ export function zonedLocalToUtc(
   return new Date(utcGuess - offset2);
 }
 
-function addCalendarDays(year: number, month: number, day: number, delta: number): { year: number; month: number; day: number } {
+export function addCalendarDays(year: number, month: number, day: number, delta: number): { year: number; month: number; day: number } {
   const utc = new Date(Date.UTC(year, month - 1, day + delta));
   return {
     year: utc.getUTCFullYear(),
@@ -92,7 +92,7 @@ function formatLocalStamp(p: { year: number; month: number; day: number; hour?: 
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(h)}:${pad2(m)}`;
 }
 
-const LONG_WEEKDAY_TO_SHORT: Record<string, string> = {
+export const LONG_WEEKDAY_TO_SHORT: Record<string, string> = {
   Monday: "Mon",
   Tuesday: "Tue",
   Wednesday: "Wed",
@@ -110,14 +110,14 @@ export type ReportingWindowSettings = {
   timezone: string;
 };
 
-function daysSinceWeekStart(currentShort: string, startDay: string): number {
+export function daysSinceWeekStart(currentShort: string, startDay: string): number {
   const current = WEEKDAY_TO_OFFSET[currentShort] ?? 0;
   const startShort = LONG_WEEKDAY_TO_SHORT[startDay] || "Mon";
   const start = WEEKDAY_TO_OFFSET[startShort] ?? 0;
   return (current - start + 7) % 7;
 }
 
-function parseSendTime(value: string): { hour: number; minute: number } {
+export function parseSendTime(value: string): { hour: number; minute: number } {
   const m = /^(\d{1,2}):(\d{2})/.exec(String(value || "").trim());
   const hour = m ? Number(m[1]) : 9;
   const minute = m ? Number(m[2]) : 0;
