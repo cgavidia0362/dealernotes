@@ -36,6 +36,9 @@ export default async function handler(req: any, res: any) {
     if (!settings.enabled) {
       return res.status(200).json({ ok: true, skipped: true, reason: "disabled" });
     }
+    if (settings.frequency === "manual") {
+      return res.status(200).json({ ok: true, skipped: true, reason: "manual" });
+    }
 
     const now = new Date();
     const scheduledFor = getLatestSlotScheduledFor(settings, now);
@@ -48,7 +51,11 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const claimed = await claimScheduledRun({ scheduledFor });
+    const claimed = await claimScheduledRun({
+      scheduledFor,
+      frequency: settings.frequency,
+      rangeType: settings.rangeType,
+    });
     if (claimed.action === "skipped") {
       return res.status(200).json({
         ok: true,
@@ -73,7 +80,7 @@ export default async function handler(req: any, res: any) {
       const result = await buildWeeklyActivityReport({ asOf: scheduledFor });
 
       if (!result.notes.length) {
-        await markRunSkipped(claimed.run.id, "No notes in this week’s reporting window.");
+        await markRunSkipped(claimed.run.id, "No notes in this reporting window.");
         return res.status(200).json({
           ok: true,
           skipped: true,
@@ -98,6 +105,7 @@ export default async function handler(req: any, res: any) {
         resendMessageId: sent.id,
         reportStart: result.window.startISO,
         reportEnd: result.window.endISO,
+        subject: result.email.subject,
       });
 
       return res.status(200).json({

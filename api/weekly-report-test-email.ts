@@ -36,7 +36,7 @@ export default async function handler(req: any, res: any) {
     const result = await buildWeeklyActivityReport();
     if (!result.notes.length) {
       return res.status(400).json({
-        error: "No notes in this week’s reporting window.",
+        error: "No notes in this reporting window.",
       });
     }
 

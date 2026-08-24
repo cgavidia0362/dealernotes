@@ -108,7 +108,60 @@ export type ReportingWindowSettings = {
   sendDay: string;
   sendTime: string;
   timezone: string;
+  sendDayOfMonth?: number;
 };
+
+export function lastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+export function addCalendarMonths(year: number, month: number, delta: number): { year: number; month: number } {
+  const utc = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return { year: utc.getUTCFullYear(), month: utc.getUTCMonth() + 1 };
+}
+
+export function clampDayOfMonth(year: number, month: number, day: number): number {
+  const requested = Number.isFinite(day) ? Math.trunc(day) : 1;
+  const last = lastDayOfMonth(year, month);
+  return Math.min(Math.max(1, requested), last);
+}
+
+export function parseIsoDate(value: string): { year: number; month: number; day: number } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!m) throw new HttpError(400, "Dates must be YYYY-MM-DD.");
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > lastDayOfMonth(year, month)) {
+    throw new HttpError(400, "Date is not a valid calendar day.");
+  }
+  return { year, month, day };
+}
+
+/** Inclusive YYYY-MM-DD range → [start, end) in the saved timezone. */
+export function getInclusiveDateWindow(
+  fromDate: string,
+  toDate: string,
+  timezone: string
+): WeeklyReportingWindow {
+  const tz = assertTimezone(timezone);
+  const startCal = parseIsoDate(fromDate);
+  const endCal = parseIsoDate(toDate);
+  const start = zonedLocalToUtc(startCal.year, startCal.month, startCal.day, 0, 0, 0, tz);
+  const endNext = addCalendarDays(endCal.year, endCal.month, endCal.day, 1);
+  const end = zonedLocalToUtc(endNext.year, endNext.month, endNext.day, 0, 0, 0, tz);
+  const maxMs = 366 * 24 * 60 * 60 * 1000;
+  if (end.getTime() - start.getTime() > maxMs) {
+    throw new HttpError(400, "Manual report range cannot be longer than 366 days.");
+  }
+  return makeWindow(
+    tz,
+    start,
+    end,
+    `${startCal.year}-${pad2(startCal.month)}-${pad2(startCal.day)} 00:00`,
+    `${endNext.year}-${pad2(endNext.month)}-${pad2(endNext.day)} 00:00`
+  );
+}
 
 export function daysSinceWeekStart(currentShort: string, startDay: string): number {
   const current = WEEKDAY_TO_OFFSET[currentShort] ?? 0;
@@ -183,15 +236,15 @@ export function getWeeklyReportingRange(now: Date = new Date()): WeeklyReporting
   );
 }
 
+function endThroughSendAt(start: Date, sendAt: Date, now: Date): Date {
+  if (sendAt.getTime() >= start.getTime() && sendAt.getTime() <= now.getTime()) return sendAt;
+  return now;
+}
+
 /**
  * Reporting window from saved automation settings.
  * Boundaries are computed in the saved timezone, then stored as UTC ISO.
  * endISO is an exclusive upper bound for note queries.
- *
- * week_to_send: range_start_day 00:00 through current send time, or through
- * this week's scheduled send day/time if that moment has already passed.
- * last_7_days: previous seven days ending at the current send time.
- * custom_weekly: not supported until a dedicated end weekday is stored.
  */
 export function getReportingWindowFromSettings(
   settings: ReportingWindowSettings,
@@ -199,21 +252,106 @@ export function getReportingWindowFromSettings(
 ): WeeklyReportingWindow {
   const timezone = assertTimezone(settings.timezone);
   const nowParts = zoneParts(now, timezone);
+  const sendClock = parseSendTime(settings.sendTime);
+  const rangeType = settings.rangeType;
 
-  if (settings.rangeType === "custom_weekly") {
+  if (rangeType === "custom_weekly") {
     throw new HttpError(
       400,
       "Custom weekly range is not supported yet. It needs a dedicated end weekday, which is not stored. Use Start of week through send time or Last 7 days."
     );
   }
 
-  if (settings.rangeType === "last_7_days") {
+  if (rangeType === "last_7_days") {
     const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const startParts = zoneParts(start, timezone);
     return makeWindow(timezone, start, now, formatLocalStamp(startParts), formatLocalStamp(nowParts));
   }
 
-  if (settings.rangeType !== "week_to_send") {
+  if (rangeType === "last_24_hours") {
+    const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const startParts = zoneParts(start, timezone);
+    return makeWindow(timezone, start, now, formatLocalStamp(startParts), formatLocalStamp(nowParts));
+  }
+
+  if (rangeType === "last_30_days") {
+    const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startParts = zoneParts(start, timezone);
+    return makeWindow(timezone, start, now, formatLocalStamp(startParts), formatLocalStamp(nowParts));
+  }
+
+  if (rangeType === "today_to_send") {
+    const start = zonedLocalToUtc(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, timezone);
+    const sendAt = zonedLocalToUtc(
+      nowParts.year,
+      nowParts.month,
+      nowParts.day,
+      sendClock.hour,
+      sendClock.minute,
+      0,
+      timezone
+    );
+    const end = endThroughSendAt(start, sendAt, now);
+    const endParts = zoneParts(end, timezone);
+    return makeWindow(
+      timezone,
+      start,
+      end,
+      `${nowParts.year}-${pad2(nowParts.month)}-${pad2(nowParts.day)} 00:00`,
+      formatLocalStamp(endParts)
+    );
+  }
+
+  if (rangeType === "previous_day") {
+    const prev = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -1);
+    const start = zonedLocalToUtc(prev.year, prev.month, prev.day, 0, 0, 0, timezone);
+    const end = zonedLocalToUtc(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, timezone);
+    return makeWindow(
+      timezone,
+      start,
+      end,
+      `${prev.year}-${pad2(prev.month)}-${pad2(prev.day)} 00:00`,
+      `${nowParts.year}-${pad2(nowParts.month)}-${pad2(nowParts.day)} 00:00`
+    );
+  }
+
+  if (rangeType === "previous_month") {
+    const prev = addCalendarMonths(nowParts.year, nowParts.month, -1);
+    const start = zonedLocalToUtc(prev.year, prev.month, 1, 0, 0, 0, timezone);
+    const end = zonedLocalToUtc(nowParts.year, nowParts.month, 1, 0, 0, 0, timezone);
+    return makeWindow(
+      timezone,
+      start,
+      end,
+      `${prev.year}-${pad2(prev.month)}-01 00:00`,
+      `${nowParts.year}-${pad2(nowParts.month)}-01 00:00`
+    );
+  }
+
+  if (rangeType === "month_to_date") {
+    const start = zonedLocalToUtc(nowParts.year, nowParts.month, 1, 0, 0, 0, timezone);
+    const sendDay = clampDayOfMonth(nowParts.year, nowParts.month, settings.sendDayOfMonth || 1);
+    const sendAt = zonedLocalToUtc(
+      nowParts.year,
+      nowParts.month,
+      sendDay,
+      sendClock.hour,
+      sendClock.minute,
+      0,
+      timezone
+    );
+    const end = endThroughSendAt(start, sendAt, now);
+    const endParts = zoneParts(end, timezone);
+    return makeWindow(
+      timezone,
+      start,
+      end,
+      `${nowParts.year}-${pad2(nowParts.month)}-01 00:00`,
+      formatLocalStamp(endParts)
+    );
+  }
+
+  if (rangeType !== "week_to_send") {
     throw new HttpError(400, "rangeType is not supported.");
   }
 
@@ -223,14 +361,8 @@ export function getReportingWindowFromSettings(
 
   const sendOffset = daysSinceWeekStart(nowParts.weekday, settings.sendDay || "Saturday");
   const sendCal = addCalendarDays(nowParts.year, nowParts.month, nowParts.day, -sendOffset);
-  const sendClock = parseSendTime(settings.sendTime);
   const sendAt = zonedLocalToUtc(sendCal.year, sendCal.month, sendCal.day, sendClock.hour, sendClock.minute, 0, timezone);
-
-  let end = now;
-  if (sendAt.getTime() >= start.getTime() && sendAt.getTime() <= now.getTime()) {
-    end = sendAt;
-  }
-
+  const end = endThroughSendAt(start, sendAt, now);
   const endParts = zoneParts(end, timezone);
   return makeWindow(
     timezone,

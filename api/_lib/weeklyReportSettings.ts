@@ -1,5 +1,6 @@
 import { HttpError } from "./types.js";
 import { getSupabaseAdmin } from "./supabaseAdmin.js";
+import { DEFAULT_SUBJECT_TEMPLATE, parseSubjectTemplate } from "./reportSubject.js";
 
 export const WEEKDAYS = [
   "Monday",
@@ -11,7 +12,26 @@ export const WEEKDAYS = [
   "Sunday",
 ] as const;
 
-export const RANGE_TYPES = ["week_to_send", "last_7_days", "custom_weekly"] as const;
+export const FREQUENCIES = ["manual", "daily", "weekly", "monthly"] as const;
+
+export const RANGE_TYPES = [
+  "today_to_send",
+  "previous_day",
+  "last_24_hours",
+  "week_to_send",
+  "last_7_days",
+  "custom_weekly",
+  "previous_month",
+  "month_to_date",
+  "last_30_days",
+] as const;
+
+const RANGE_BY_FREQUENCY: Record<(typeof FREQUENCIES)[number], readonly string[]> = {
+  manual: RANGE_TYPES,
+  daily: ["today_to_send", "previous_day", "last_24_hours"],
+  weekly: ["week_to_send", "last_7_days", "custom_weekly"],
+  monthly: ["previous_month", "month_to_date", "last_30_days"],
+};
 
 export const TIMEZONES = [
   "America/Chicago",
@@ -25,14 +45,18 @@ export const TIMEZONES = [
 export const MAX_RECIPIENTS = 30;
 
 export type Weekday = (typeof WEEKDAYS)[number];
+export type Frequency = (typeof FREQUENCIES)[number];
 export type RangeType = (typeof RANGE_TYPES)[number];
 export type AllowedTimezone = (typeof TIMEZONES)[number];
 
 export type WeeklyReportSettings = {
   id: number;
   enabled: boolean;
+  frequency: Frequency;
+  subjectTemplate: string;
   sendDay: Weekday;
   sendTime: string;
+  sendDayOfMonth: number;
   timezone: AllowedTimezone;
   rangeType: RangeType;
   rangeStartDay: Weekday;
@@ -45,8 +69,11 @@ export type WeeklyReportSettings = {
 type SettingsRow = {
   id: number;
   enabled: boolean;
+  frequency?: string | null;
+  subject_template?: string | null;
   send_day: string;
   send_time: string;
+  send_day_of_month?: number | null;
   timezone: string;
   range_type: string;
   range_start_day: string;
@@ -61,6 +88,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function isWeekday(v: unknown): v is Weekday {
   return typeof v === "string" && (WEEKDAYS as readonly string[]).includes(v);
+}
+
+function isFrequency(v: unknown): v is Frequency {
+  return typeof v === "string" && (FREQUENCIES as readonly string[]).includes(v);
 }
 
 function isRangeType(v: unknown): v is RangeType {
@@ -79,12 +110,41 @@ export function isValidEmail(value: string): boolean {
   return EMAIL_RE.test(normalizeEmail(value));
 }
 
+export function parseRecipientList(incoming: unknown): string[] {
+  const list = Array.isArray(incoming) ? incoming : [];
+  if (list.length > MAX_RECIPIENTS) {
+    throw new HttpError(400, `A maximum of ${MAX_RECIPIENTS} recipients is allowed.`);
+  }
+  const recipientEmails: string[] = [];
+  for (const item of list) {
+    const email = normalizeEmail(String(item || ""));
+    if (!email) continue;
+    if (!isValidEmail(email)) throw new HttpError(400, `Invalid recipient email: ${email}`);
+    if (!recipientEmails.includes(email)) recipientEmails.push(email);
+  }
+  return recipientEmails;
+}
+
+function parseSendDayOfMonth(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 31) {
+    throw new HttpError(400, "sendDayOfMonth must be a whole number from 1 to 31.");
+  }
+  return n;
+}
+
 function mapRow(row: SettingsRow): WeeklyReportSettings {
   return {
     id: Number(row.id) || 1,
     enabled: !!row.enabled,
+    frequency: isFrequency(row.frequency) ? row.frequency : "weekly",
+    subjectTemplate: String(row.subject_template || "").trim() || DEFAULT_SUBJECT_TEMPLATE,
     sendDay: isWeekday(row.send_day) ? row.send_day : "Saturday",
     sendTime: TIME_RE.test(String(row.send_time || "")) ? String(row.send_time) : "09:00",
+    sendDayOfMonth:
+      typeof row.send_day_of_month === "number" && row.send_day_of_month >= 1 && row.send_day_of_month <= 31
+        ? row.send_day_of_month
+        : 1,
     timezone: isTimezone(row.timezone) ? row.timezone : "America/Chicago",
     rangeType: isRangeType(row.range_type) ? row.range_type : "week_to_send",
     rangeStartDay: isWeekday(row.range_start_day) ? row.range_start_day : "Monday",
@@ -101,8 +161,11 @@ function defaultSettings(): WeeklyReportSettings {
   return {
     id: 1,
     enabled: false,
+    frequency: "weekly",
+    subjectTemplate: DEFAULT_SUBJECT_TEMPLATE,
     sendDay: "Saturday",
     sendTime: "09:00",
+    sendDayOfMonth: 1,
     timezone: "America/Chicago",
     rangeType: "week_to_send",
     rangeStartDay: "Monday",
@@ -118,9 +181,12 @@ function tableMissing(error: { message?: string; code?: string } | null): boolea
   return error?.code === "42P01" || (msg.includes("weekly_report_settings") && msg.includes("does not exist"));
 }
 
-export function parseSettingsInput(body: unknown): Omit<WeeklyReportSettings, "id" | "createdAt" | "updatedAt"> {
+export type SettingsInput = Omit<WeeklyReportSettings, "id" | "createdAt" | "updatedAt">;
+
+export function parseSettingsInput(body: unknown): SettingsInput {
   const raw = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const enabled = raw.enabled === true;
+  const frequency = isFrequency(raw.frequency) ? raw.frequency : "weekly";
 
   if (!isWeekday(raw.sendDay)) throw new HttpError(400, "sendDay must be a valid weekday.");
   const rawTime = String(raw.sendTime || "").trim();
@@ -135,20 +201,13 @@ export function parseSettingsInput(body: unknown): Omit<WeeklyReportSettings, "i
       "Custom weekly range is not supported yet. Choose Start of week through send time or Last 7 days."
     );
   }
+  const allowedRanges = RANGE_BY_FREQUENCY[frequency];
+  if (frequency !== "manual" && !allowedRanges.includes(raw.rangeType)) {
+    throw new HttpError(400, "Reporting range does not match the selected frequency.");
+  }
   if (!isWeekday(raw.rangeStartDay)) throw new HttpError(400, "rangeStartDay must be a valid weekday.");
 
-  const incoming = Array.isArray(raw.recipientEmails) ? raw.recipientEmails : [];
-  if (incoming.length > MAX_RECIPIENTS) {
-    throw new HttpError(400, `A maximum of ${MAX_RECIPIENTS} recipients is allowed.`);
-  }
-  const recipientEmails: string[] = [];
-  for (const item of incoming) {
-    const email = normalizeEmail(String(item || ""));
-    if (!email) continue;
-    if (!isValidEmail(email)) throw new HttpError(400, `Invalid recipient email: ${email}`);
-    if (!recipientEmails.includes(email)) recipientEmails.push(email);
-  }
-
+  const recipientEmails = parseRecipientList(raw.recipientEmails);
   const replyToEmail = normalizeEmail(String(raw.replyToEmail || ""));
   if (replyToEmail && !isValidEmail(replyToEmail)) {
     throw new HttpError(400, "replyToEmail is not a valid email address.");
@@ -156,13 +215,33 @@ export function parseSettingsInput(body: unknown): Omit<WeeklyReportSettings, "i
 
   return {
     enabled,
+    frequency,
+    subjectTemplate: parseSubjectTemplate(raw.subjectTemplate ?? DEFAULT_SUBJECT_TEMPLATE),
     sendDay: raw.sendDay,
     sendTime,
+    sendDayOfMonth: parseSendDayOfMonth(raw.sendDayOfMonth ?? 1),
     timezone: raw.timezone,
     rangeType: raw.rangeType,
     rangeStartDay: raw.rangeStartDay,
     recipientEmails,
     replyToEmail,
+  };
+}
+
+function rowPayload(input: SettingsInput) {
+  return {
+    id: 1,
+    enabled: input.enabled,
+    frequency: input.frequency,
+    subject_template: input.subjectTemplate,
+    send_day: input.sendDay,
+    send_time: input.sendTime,
+    send_day_of_month: input.sendDayOfMonth,
+    timezone: input.timezone,
+    range_type: input.rangeType,
+    range_start_day: input.rangeStartDay,
+    recipient_emails: input.recipientEmails,
+    reply_to_email: input.replyToEmail || null,
   };
 }
 
@@ -185,17 +264,7 @@ export async function loadWeeklyReportSettings(): Promise<WeeklyReportSettings> 
   const seed = defaultSettings();
   const { data: inserted, error: insertErr } = await supabaseAdmin
     .from("weekly_report_settings")
-    .insert({
-      id: 1,
-      enabled: seed.enabled,
-      send_day: seed.sendDay,
-      send_time: seed.sendTime,
-      timezone: seed.timezone,
-      range_type: seed.rangeType,
-      range_start_day: seed.rangeStartDay,
-      recipient_emails: seed.recipientEmails,
-      reply_to_email: null,
-    })
+    .insert(rowPayload(seed))
     .select("*")
     .single();
 
@@ -208,26 +277,11 @@ export async function loadWeeklyReportSettings(): Promise<WeeklyReportSettings> 
   return mapRow(inserted as SettingsRow);
 }
 
-export async function saveWeeklyReportSettings(
-  input: Omit<WeeklyReportSettings, "id" | "createdAt" | "updatedAt">
-): Promise<WeeklyReportSettings> {
+export async function saveWeeklyReportSettings(input: SettingsInput): Promise<WeeklyReportSettings> {
   const supabaseAdmin = getSupabaseAdmin();
   const { data, error } = await supabaseAdmin
     .from("weekly_report_settings")
-    .upsert(
-      {
-        id: 1,
-        enabled: input.enabled,
-        send_day: input.sendDay,
-        send_time: input.sendTime,
-        timezone: input.timezone,
-        range_type: input.rangeType,
-        range_start_day: input.rangeStartDay,
-        recipient_emails: input.recipientEmails,
-        reply_to_email: input.replyToEmail || null,
-      },
-      { onConflict: "id" }
-    )
+    .upsert(rowPayload(input), { onConflict: "id" })
     .select("*")
     .single();
 
@@ -241,18 +295,9 @@ export async function saveWeeklyReportSettings(
 }
 
 export function productionRecipients(settings: WeeklyReportSettings): string[] {
-  const emails: string[] = [];
-  for (const item of settings.recipientEmails || []) {
-    const email = normalizeEmail(String(item || ""));
-    if (!email) continue;
-    if (!isValidEmail(email)) throw new HttpError(400, `Invalid recipient email: ${email}`);
-    if (!emails.includes(email)) emails.push(email);
-  }
+  const emails = parseRecipientList(settings.recipientEmails);
   if (!emails.length) {
-    throw new HttpError(400, "Add at least one valid recipient before sending the weekly report.");
-  }
-  if (emails.length > MAX_RECIPIENTS) {
-    throw new HttpError(400, `A maximum of ${MAX_RECIPIENTS} recipients is allowed.`);
+    throw new HttpError(400, "Add at least one valid recipient before sending the report.");
   }
   return emails;
 }

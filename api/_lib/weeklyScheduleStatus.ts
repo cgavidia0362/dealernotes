@@ -6,8 +6,12 @@ export type PublicRun = {
   id: string;
   source: WeeklyReportRun["source"];
   status: WeeklyReportRun["status"];
+  frequency: string | null;
+  rangeType: string | null;
   scheduledFor: string;
   sentAt: string | null;
+  reportStart: string | null;
+  reportEnd: string | null;
   recipientCount: number | null;
   errorMessage: string | null;
 };
@@ -24,8 +28,12 @@ function toPublicRun(run: WeeklyReportRun): PublicRun {
     id: run.id,
     source: run.source,
     status: run.status,
+    frequency: run.frequency,
+    rangeType: run.rangeType,
     scheduledFor: run.scheduledFor,
     sentAt: run.sentAt,
+    reportStart: run.reportStart,
+    reportEnd: run.reportEnd,
     recipientCount: run.recipientCount,
     errorMessage: run.errorMessage,
   };

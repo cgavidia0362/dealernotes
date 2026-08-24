@@ -4,6 +4,8 @@ export type WeeklyReportEmailInput = {
   window: WeeklyReportingWindow;
   glance: string[];
   notes: EnrichedNote[];
+  subject?: string;
+  frequency?: string;
 };
 
 export type WeeklyReportEmail = {
@@ -110,7 +112,11 @@ function activityLine(counts: { noteCount: number; repCount: number; dealerCount
 export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): WeeklyReportEmail {
   const dates = formatWeeklyEmailDates(input.window);
   const timeZone = input.window.timezone || "America/Chicago";
-  const subject = `Dealer Note Weekly Report — ${dates.startShort} through ${dates.endShort}`;
+  const isWeekly = !input.frequency || input.frequency === "weekly";
+  const title = isWeekly ? "Dealer Note Weekly Report" : "Dealer Note Report";
+  const glanceHeading = isWeekly ? "Week at a Glance" : "Period at a Glance";
+  const subject =
+    input.subject || `Dealer Note Weekly Report — ${dates.startShort} through ${dates.endShort}`;
   const period = `${dates.startLong} – ${dates.endLong}`;
   const counts = weeklyActivityCounts(input.notes);
   const totals = activityLine(counts);
@@ -134,14 +140,14 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
     .join("\n\n--------------------------------\n\n");
 
   const text = [
-    "Dealer Note Weekly Report",
+    title,
     "",
     "Reporting Period",
     period,
     "",
     totals,
     "",
-    "WEEK AT A GLANCE",
+    glanceHeading.toUpperCase(),
     "",
     textGlance,
     "",
@@ -198,7 +204,7 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
     <div style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;">
       <div style="padding:24px 20px 20px 20px;border-bottom:3px solid #1e3a8a;">
         <div style="font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">
-          Dealer Note Weekly Report
+          ${escapeHtml(title)}
         </div>
       </div>
       <div style="padding:20px 20px 8px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -207,7 +213,7 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
         <div style="font-size:14px;line-height:1.4;color:#475569;">${escapeHtml(totals)}</div>
       </div>
       <div style="padding:24px 20px 8px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 12px 0;">Week at a Glance</div>
+        <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 12px 0;">${escapeHtml(glanceHeading)}</div>
         <ul style="margin:0;padding:0 0 0 20px;">
           ${glanceHtml}
         </ul>

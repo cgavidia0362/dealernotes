@@ -37,9 +37,11 @@ export default async function handler(req: any, res: any) {
       settings,
       fromEmail: publicFromEmail(),
       ...status,
-      message: settings.enabled
-        ? "Settings saved. Automatic sending will follow this schedule."
-        : "Settings saved. Automatic sending is disabled.",
+      message: settings.frequency === "manual"
+        ? "Settings saved. Frequency is Manual, so automatic sending will not run."
+        : settings.enabled
+          ? "Settings saved. Automatic sending will follow this schedule."
+          : "Settings saved. Automatic sending is disabled.",
     });
   } catch (e: any) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });

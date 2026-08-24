@@ -9,6 +9,9 @@ export type WeeklyReportRun = {
   id: string;
   source: RunSource;
   status: RunStatus;
+  frequency: string | null;
+  rangeType: string | null;
+  subject: string | null;
   reportStart: string | null;
   reportEnd: string | null;
   scheduledFor: string;
@@ -24,6 +27,9 @@ type RunRow = {
   id: string;
   source: string;
   status: string;
+  frequency?: string | null;
+  range_type?: string | null;
+  subject?: string | null;
   report_start: string | null;
   report_end: string | null;
   scheduled_for: string;
@@ -40,6 +46,9 @@ function mapRun(row: RunRow): WeeklyReportRun {
     id: String(row.id),
     source: row.source === "manual" ? "manual" : "scheduled",
     status: (row.status as RunStatus) || "pending",
+    frequency: row.frequency ? String(row.frequency) : null,
+    rangeType: row.range_type ? String(row.range_type) : null,
+    subject: row.subject ? String(row.subject) : null,
     reportStart: row.report_start,
     reportEnd: row.report_end,
     scheduledFor: row.scheduled_for,
@@ -120,6 +129,8 @@ export async function claimScheduledRun(opts: {
   scheduledFor: Date;
   reportStart?: string | null;
   reportEnd?: string | null;
+  frequency?: string | null;
+  rangeType?: string | null;
 }): Promise<{ run: WeeklyReportRun; action: "claimed" | "skipped" }> {
   const supabaseAdmin = getSupabaseAdmin();
   const scheduledIso = opts.scheduledFor.toISOString();
@@ -134,6 +145,8 @@ export async function claimScheduledRun(opts: {
       started_at: nowIso,
       report_start: opts.reportStart || null,
       report_end: opts.reportEnd || null,
+      frequency: opts.frequency || null,
+      range_type: opts.rangeType || null,
     })
     .select("*")
     .maybeSingle();
@@ -193,6 +206,7 @@ export async function markRunSent(
     resendMessageId?: string | null;
     reportStart?: string | null;
     reportEnd?: string | null;
+    subject?: string | null;
   }
 ) {
   const supabaseAdmin = getSupabaseAdmin();
@@ -206,6 +220,7 @@ export async function markRunSent(
       error_message: null,
       ...(opts.reportStart ? { report_start: opts.reportStart } : {}),
       ...(opts.reportEnd ? { report_end: opts.reportEnd } : {}),
+      ...(opts.subject ? { subject: opts.subject } : {}),
     })
     .eq("id", id);
   if (error) throwIfMissing(error, "Could not update run as sent.");
@@ -243,6 +258,9 @@ export async function recordManualRun(opts: {
   recipientCount?: number | null;
   resendMessageId?: string | null;
   errorMessage?: string | null;
+  frequency?: string | null;
+  rangeType?: string | null;
+  subject?: string | null;
 }): Promise<void> {
   const supabaseAdmin = getSupabaseAdmin();
   const now = new Date();
@@ -257,6 +275,9 @@ export async function recordManualRun(opts: {
     recipient_count: opts.recipientCount ?? null,
     resend_message_id: opts.resendMessageId || null,
     error_message: opts.errorMessage ? String(opts.errorMessage).slice(0, 500) : null,
+    frequency: opts.frequency || "manual",
+    range_type: opts.rangeType || null,
+    subject: opts.subject || null,
   });
   if (error && !tableMissing(error)) {
     console.error("[weekly-report] could not record manual run");

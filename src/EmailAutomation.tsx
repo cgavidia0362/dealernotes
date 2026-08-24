@@ -2,13 +2,27 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient";
 
 type ToastKind = "success" | "error";
+type Frequency = "manual" | "daily" | "weekly" | "monthly";
+type RangeType =
+  | "today_to_send"
+  | "previous_day"
+  | "last_24_hours"
+  | "week_to_send"
+  | "last_7_days"
+  | "custom_weekly"
+  | "previous_month"
+  | "month_to_date"
+  | "last_30_days";
 
 type WeeklyReportSettings = {
   enabled: boolean;
+  frequency: Frequency;
+  subjectTemplate: string;
   sendDay: string;
   sendTime: string;
+  sendDayOfMonth: number;
   timezone: string;
-  rangeType: "week_to_send" | "last_7_days" | "custom_weekly";
+  rangeType: RangeType;
   rangeStartDay: string;
   recipientEmails: string[];
   replyToEmail: string;
@@ -18,8 +32,12 @@ type RecentRun = {
   id: string;
   source: "scheduled" | "manual";
   status: "pending" | "sending" | "sent" | "failed" | "skipped";
+  frequency: string | null;
+  rangeType: string | null;
   scheduledFor: string;
   sentAt: string | null;
+  reportStart: string | null;
+  reportEnd: string | null;
   recipientCount: number | null;
   errorMessage: string | null;
 };
@@ -42,8 +60,11 @@ const TIMEZONES = [
   "America/Phoenix",
   "UTC",
 ];
+const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_RECIPIENTS = 30;
+const MAX_SUBJECT = 180;
+const DEFAULT_SUBJECT = "Dealer Note Report — {startDate} to {endDate}";
 
 function normalizeTime(value: string): string {
   const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(value || "").trim());
@@ -51,10 +72,19 @@ function normalizeTime(value: string): string {
   return `${m[1].padStart(2, "0")}:${m[2]}`;
 }
 
+function defaultRange(frequency: Frequency): RangeType {
+  if (frequency === "daily") return "today_to_send";
+  if (frequency === "monthly") return "previous_month";
+  return "week_to_send";
+}
+
 const emptySettings = (): WeeklyReportSettings => ({
   enabled: false,
+  frequency: "weekly",
+  subjectTemplate: DEFAULT_SUBJECT,
   sendDay: "Saturday",
   sendTime: "09:00",
+  sendDayOfMonth: 1,
   timezone: "America/Chicago",
   rangeType: "week_to_send",
   rangeStartDay: "Monday",
@@ -67,6 +97,15 @@ async function authHeader(): Promise<HeadersInit | null> {
   const token = data?.session?.access_token;
   if (!token) return null;
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
+function ymdInZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZone || "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 function formatWhen(iso: string | null | undefined, timeZone: string): string {
@@ -96,10 +135,81 @@ function statusLabel(status: RecentRun["status"]): string {
   return "Pending";
 }
 
-function rangeLabel(settings: WeeklyReportSettings): string {
-  if (settings.rangeType === "last_7_days") return "Last 7 days";
-  if (settings.rangeType === "custom_weekly") return `Custom week starting ${settings.rangeStartDay}`;
-  return `${settings.rangeStartDay} through send time`;
+function frequencyLabel(value: string | null | undefined): string {
+  if (value === "daily") return "Daily";
+  if (value === "monthly") return "Monthly";
+  if (value === "manual") return "Manual";
+  if (value === "weekly") return "Weekly";
+  return "";
+}
+
+function rangeLabel(rangeType: string, rangeStartDay?: string): string {
+  if (rangeType === "today_to_send") return "Today through send time";
+  if (rangeType === "previous_day") return "Previous completed day";
+  if (rangeType === "last_24_hours") return "Last 24 hours";
+  if (rangeType === "last_7_days") return "Last 7 days";
+  if (rangeType === "previous_month") return "Previous completed month";
+  if (rangeType === "month_to_date") return "Month to date through send time";
+  if (rangeType === "last_30_days") return "Last 30 days";
+  if (rangeType === "custom" || rangeType === "custom_range") return "Custom dates";
+  if (rangeType === "custom_weekly") return `Custom week starting ${rangeStartDay || "Monday"}`;
+  if (rangeType === "week_to_send") return `${rangeStartDay || "Monday"} through send time`;
+  return rangeType || "";
+}
+
+function PreviewFrame({
+  title,
+  previewing,
+  preview,
+  previewError,
+  emptyHint,
+  onRefresh,
+  refreshLabel,
+}: {
+  title: string;
+  previewing: boolean;
+  preview: EmailPreview | null;
+  previewError: string;
+  emptyHint: string;
+  onRefresh: () => void;
+  refreshLabel: string;
+}) {
+  return (
+    <div className="rounded-xl border bg-slate-100 p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-800">{title}</div>
+          <div className="text-xs text-slate-500 break-words">
+            {preview
+              ? [preview.subject, preview.rangeLabel, `${preview.noteCount} notes`].filter(Boolean).join(" · ")
+              : emptyHint}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium border border-indigo-600 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 bg-white"
+          onClick={onRefresh}
+          disabled={previewing}
+        >
+          {previewing ? "Refreshing…" : refreshLabel}
+        </button>
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+        {previewing && !preview && <div className="p-6 text-sm text-slate-500">Building the email preview…</div>}
+        {!previewing && previewError && !preview && <div className="p-6 text-sm text-slate-600">{previewError}</div>}
+        {!previewing && !preview && !previewError && <div className="p-6 text-sm text-slate-500">{emptyHint}</div>}
+        {preview?.html && (
+          <iframe
+            title={title}
+            sandbox=""
+            srcDoc={preview.html}
+            className="w-full bg-white block"
+            style={{ height: "min(78vh, 920px)", border: 0 }}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function EmailAutomationView({
@@ -123,6 +233,29 @@ export function EmailAutomationView({
   const [nextScheduled, setNextScheduled] = useState<string | null>(null);
   const [recentRuns, setRecentRuns] = useState<RecentRun[]>([]);
 
+  const [manualFrom, setManualFrom] = useState("");
+  const [manualTo, setManualTo] = useState("");
+  const [manualSubject, setManualSubject] = useState(DEFAULT_SUBJECT);
+  const [manualUseSaved, setManualUseSaved] = useState(true);
+  const [manualRecipients, setManualRecipients] = useState<string[]>([]);
+  const [manualDraft, setManualDraft] = useState("");
+  const [manualPreviewing, setManualPreviewing] = useState(false);
+  const [manualPreview, setManualPreview] = useState<EmailPreview | null>(null);
+  const [manualPreviewError, setManualPreviewError] = useState("");
+  const [manualSending, setManualSending] = useState(false);
+  const [confirmManual, setConfirmManual] = useState(false);
+
+  const applySettingsPayload = (json: any) => {
+    if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
+    if (json.fromEmail !== undefined) setFromEmail(String(json.fromEmail || ""));
+    if ("lastSent" in json) setLastSent(json.lastSent || null);
+    if ("nextScheduled" in json) setNextScheduled(json.nextScheduled || null);
+    if (Array.isArray(json.recentRuns)) setRecentRuns(json.recentRuns);
+    if (Array.isArray(json.settings?.recipientEmails)) {
+      setSavedRecipientCount(json.settings.recipientEmails.length);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -140,12 +273,13 @@ export function EmailAutomationView({
           return;
         }
         if (cancelled) return;
-        if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
-        setFromEmail(String(json.fromEmail || ""));
-        setLastSent(json.lastSent || null);
-        setNextScheduled(json.nextScheduled || null);
-        setRecentRuns(Array.isArray(json.recentRuns) ? json.recentRuns : []);
-        setSavedRecipientCount(Array.isArray(json.settings?.recipientEmails) ? json.settings.recipientEmails.length : 0);
+        applySettingsPayload(json);
+        const tz = String(json.settings?.timezone || "America/Chicago");
+        const today = ymdInZone(new Date(), tz);
+        const weekAgo = ymdInZone(new Date(Date.now() - 6 * 24 * 60 * 60 * 1000), tz);
+        setManualFrom(weekAgo);
+        setManualTo(today);
+        setManualSubject(String(json.settings?.subjectTemplate || DEFAULT_SUBJECT));
       } catch (e: any) {
         if (!cancelled) showToast(e?.message || "Could not load email settings.", "error");
       } finally {
@@ -155,20 +289,8 @@ export function EmailAutomationView({
     return () => {
       cancelled = true;
     };
-    // Load once on mount. showToast is not stable and must not retrigger the request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const applySettingsPayload = (json: any) => {
-    if (json.settings) setSettings({ ...emptySettings(), ...json.settings });
-    if (json.fromEmail !== undefined) setFromEmail(String(json.fromEmail || ""));
-    if ("lastSent" in json) setLastSent(json.lastSent || null);
-    if ("nextScheduled" in json) setNextScheduled(json.nextScheduled || null);
-    if (Array.isArray(json.recentRuns)) setRecentRuns(json.recentRuns);
-    if (Array.isArray(json.settings?.recipientEmails)) {
-      setSavedRecipientCount(json.settings.recipientEmails.length);
-    }
-  };
 
   const refreshStatus = async () => {
     const headers = await authHeader();
@@ -178,39 +300,48 @@ export function EmailAutomationView({
     if (resp.ok) applySettingsPayload(json);
   };
 
+  const isManualFrequency = settings.frequency === "manual";
   const statusLine = useMemo(() => {
-    const on = settings.enabled ? "Automation Enabled" : "Automation Disabled";
-    return `${on} · ${settings.sendDay} at ${settings.sendTime} · ${settings.timezone}`;
-  }, [settings]);
+    const on = settings.enabled && !isManualFrequency ? "Automation Enabled" : "Automation Disabled";
+    const freq = frequencyLabel(settings.frequency);
+    if (settings.frequency === "daily") return `${on} · ${freq} at ${settings.sendTime} · ${settings.timezone}`;
+    if (settings.frequency === "monthly") {
+      return `${on} · ${freq} on day ${settings.sendDayOfMonth} at ${settings.sendTime} · ${settings.timezone}`;
+    }
+    if (settings.frequency === "manual") return `${on} · Manual only · ${settings.timezone}`;
+    return `${on} · ${freq} ${settings.sendDay} at ${settings.sendTime} · ${settings.timezone}`;
+  }, [settings, isManualFrequency]);
 
   const lastSentLabel = lastSent ? formatWhen(lastSent, settings.timezone) : "Never";
-  const nextScheduledLabel = !settings.enabled
-    ? "Disabled"
-    : nextScheduled
-      ? formatWhen(nextScheduled, settings.timezone)
-      : "Disabled";
+  const nextScheduledLabel =
+    !settings.enabled || isManualFrequency
+      ? "Disabled"
+      : nextScheduled
+        ? formatWhen(nextScheduled, settings.timezone)
+        : "Disabled";
 
-  const addRecipient = () => {
-    const email = recipientDraft.trim().toLowerCase();
+  const addToList = (
+    list: string[],
+    draft: string,
+    setList: (next: string[]) => void,
+    setDraft: (v: string) => void
+  ) => {
+    const email = draft.trim().toLowerCase();
     if (!email) return;
     if (!EMAIL_RE.test(email)) {
       showToast("Enter a valid email address.", "error");
       return;
     }
-    if (settings.recipientEmails.includes(email)) {
+    if (list.includes(email)) {
       showToast("That recipient is already on the list.", "error");
       return;
     }
-    if (settings.recipientEmails.length >= MAX_RECIPIENTS) {
+    if (list.length >= MAX_RECIPIENTS) {
       showToast(`A maximum of ${MAX_RECIPIENTS} recipients is allowed.`, "error");
       return;
     }
-    setSettings((s) => ({ ...s, recipientEmails: [...s.recipientEmails, email] }));
-    setRecipientDraft("");
-  };
-
-  const removeRecipient = (email: string) => {
-    setSettings((s) => ({ ...s, recipientEmails: s.recipientEmails.filter((e) => e !== email) }));
+    setList([...list, email]);
+    setDraft("");
   };
 
   const refreshPreview = async (opts?: { quiet?: boolean }) => {
@@ -232,7 +363,7 @@ export function EmailAutomationView({
         return;
       }
       setPreview({
-        subject: String(json.subject || "Dealer Note Weekly Report"),
+        subject: String(json.subject || "Dealer Note Report"),
         html: String(json.html || ""),
         noteCount: Number(json.noteCount) || 0,
         repCount: Number(json.repCount) || 0,
@@ -254,6 +385,10 @@ export function EmailAutomationView({
       showToast("Reply-To must be a valid email address.", "error");
       return;
     }
+    if (!settings.subjectTemplate.trim()) {
+      showToast("Subject is required.", "error");
+      return;
+    }
     setSaving(true);
     try {
       const headers = await authHeader();
@@ -268,6 +403,7 @@ export function EmailAutomationView({
           ...settings,
           sendTime: normalizeTime(settings.sendTime),
           replyToEmail: settings.replyToEmail.trim().toLowerCase(),
+          subjectTemplate: settings.subjectTemplate.trim(),
         }),
       });
       const json = await resp.json().catch(() => ({} as any));
@@ -277,7 +413,7 @@ export function EmailAutomationView({
       }
       applySettingsPayload(json);
       showToast(json?.message || "Settings saved.", "success");
-      await refreshPreview({ quiet: true });
+      if (json.settings?.frequency !== "manual") await refreshPreview({ quiet: true });
     } catch (e: any) {
       showToast(e?.message || "Could not save settings.", "error");
     } finally {
@@ -322,16 +458,99 @@ export function EmailAutomationView({
       });
       const json = await resp.json().catch(() => ({} as any));
       if (!resp.ok) {
-        showToast(json?.error || "Could not send the weekly report.", "error");
+        showToast(json?.error || "Could not send the report.", "error");
         return;
       }
       setConfirmSend(false);
-      showToast(json?.message || "Weekly report sent.", "success");
+      showToast(json?.message || "Report sent.", "success");
       await refreshStatus();
     } catch (e: any) {
-      showToast(e?.message || "Could not send the weekly report.", "error");
+      showToast(e?.message || "Could not send the report.", "error");
     } finally {
       setSendingNow(false);
+    }
+  };
+
+  const manualRecipientCount = manualUseSaved ? savedRecipientCount : manualRecipients.length;
+
+  const previewManual = async (opts?: { quiet?: boolean }) => {
+    setManualPreviewing(true);
+    setManualPreviewError("");
+    try {
+      const headers = await authHeader();
+      if (!headers) {
+        showToast("Please log in again.", "error");
+        return;
+      }
+      const resp = await fetch("/api/weekly-report-manual-preview", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          fromDate: manualFrom,
+          toDate: manualTo,
+          subject: manualSubject.trim() || DEFAULT_SUBJECT,
+          useSavedRecipients: manualUseSaved,
+          recipientEmails: manualUseSaved ? undefined : manualRecipients,
+        }),
+      });
+      const json = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) {
+        const msg = json?.error || "Manual preview failed.";
+        setManualPreview(null);
+        setManualPreviewError(msg);
+        if (!opts?.quiet) showToast(msg, "error");
+        return;
+      }
+      setManualPreview({
+        subject: String(json.subject || "Dealer Note Report"),
+        html: String(json.html || ""),
+        noteCount: Number(json.noteCount) || 0,
+        repCount: Number(json.repCount) || 0,
+        dealerCount: Number(json.dealerCount) || 0,
+        rangeLabel: String(json.reportingWindow?.rangeLabel || ""),
+      });
+    } catch (e: any) {
+      const msg = e?.message || "Manual preview failed.";
+      setManualPreview(null);
+      setManualPreviewError(msg);
+      if (!opts?.quiet) showToast(msg, "error");
+    } finally {
+      setManualPreviewing(false);
+    }
+  };
+
+  const sendManual = async () => {
+    setManualSending(true);
+    try {
+      const headers = await authHeader();
+      if (!headers) {
+        showToast("Please log in again.", "error");
+        return;
+      }
+      const resp = await fetch("/api/weekly-report-manual-send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          confirm: true,
+          fromDate: manualFrom,
+          toDate: manualTo,
+          subject: manualSubject.trim() || DEFAULT_SUBJECT,
+          useSavedRecipients: manualUseSaved,
+          recipientEmails: manualUseSaved ? undefined : manualRecipients,
+        }),
+      });
+      const json = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) {
+        showToast(json?.error || "Could not send the manual report.", "error");
+        return;
+      }
+      setConfirmManual(false);
+      showToast(json?.message || "Manual report sent.", "success");
+      await refreshStatus();
+    } catch (e: any) {
+      showToast(e?.message || "Could not send the manual report.", "error");
+    } finally {
+      setManualSending(false);
     }
   };
 
@@ -344,34 +563,31 @@ export function EmailAutomationView({
       <div>
         <div className="text-xl font-semibold text-slate-800">Email Automation</div>
         <div className="text-sm text-slate-500 mt-1">
-          Control weekly report settings here. Automatic sending follows the schedule you save.
+          Control scheduled and manual Dealer Note reports. Automatic sending follows the frequency and schedule you save.
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
         <div className="min-w-0 space-y-5">
           <section className="rounded-xl border bg-white p-4 space-y-2">
-            <div className="text-sm font-semibold text-slate-800">Current status</div>
+            <div className="text-sm font-semibold text-slate-800">Automation status</div>
             <div className="text-sm text-slate-700">{statusLine}</div>
             <div className="text-sm text-slate-600">
-              {settings.recipientEmails.length} {settings.recipientEmails.length === 1 ? "recipient" : "recipients"} · {rangeLabel(settings)}
+              {settings.recipientEmails.length} {settings.recipientEmails.length === 1 ? "recipient" : "recipients"} ·{" "}
+              {rangeLabel(settings.rangeType, settings.rangeStartDay)}
             </div>
             <div className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 space-y-1">
               <div>Last sent: {lastSentLabel}</div>
               <div>Next scheduled: {nextScheduledLabel}</div>
-              {settings.enabled ? (
-                <div className="text-slate-500">
-                  Automatic sending is on. The platform checks this schedule once per day, so the email may go out later than the exact time you chose.
-                </div>
+              {settings.enabled && !isManualFrequency ? (
+                <div className="text-slate-500">Automatic sending is on. The scheduler checks about every 5 minutes.</div>
               ) : (
-                <div className="text-slate-500">Automatic sending is disabled.</div>
+                <div className="text-slate-500">
+                  {isManualFrequency ? "Frequency is Manual, so nothing is sent automatically." : "Automatic sending is disabled."}
+                </div>
               )}
             </div>
-          </section>
-
-          <section className="rounded-xl border bg-white p-4 space-y-3">
-            <div className="text-sm font-semibold text-slate-800">Automation status</div>
-            <label className="flex items-center gap-3 text-sm text-slate-700">
+            <label className="flex items-center gap-3 text-sm text-slate-700 pt-1">
               <input
                 type="checkbox"
                 className="h-4 w-4"
@@ -380,66 +596,72 @@ export function EmailAutomationView({
               />
               Automatic Reports Enabled
             </label>
-            <div className="text-xs text-slate-500">When enabled, the weekly report sends automatically on the saved day and time.</div>
           </section>
 
-          {recentRuns.length > 0 && (
-            <section className="rounded-xl border bg-white p-4 space-y-2">
-              <div className="text-sm font-semibold text-slate-800">Recent activity</div>
-              <div className="divide-y divide-slate-100">
-                {recentRuns.slice(0, 5).map((run) => (
-                  <div key={run.id} className="py-2 first:pt-0 last:pb-0 text-xs text-slate-600 space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                      <span className="font-medium text-slate-800">{statusLabel(run.status)}</span>
-                      <span>·</span>
-                      <span>{run.source === "manual" ? "Manual" : "Scheduled"}</span>
-                      {run.recipientCount != null && (
-                        <>
-                          <span>·</span>
-                          <span>
-                            {run.recipientCount} {run.recipientCount === 1 ? "recipient" : "recipients"}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    <div>Scheduled: {formatWhen(run.scheduledFor, settings.timezone)}</div>
-                    {run.sentAt && <div>Sent: {formatWhen(run.sentAt, settings.timezone)}</div>}
-                    {run.status === "failed" && run.errorMessage && (
-                      <div className="text-red-700">{run.errorMessage}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          <section className="rounded-xl border bg-white p-4 space-y-3">
+            <div className="text-sm font-semibold text-slate-800">Frequency</div>
+            <select
+              className="w-full border rounded-lg px-2 py-2 text-sm"
+              value={settings.frequency}
+              onChange={(e) => {
+                const frequency = e.target.value as Frequency;
+                setSettings((s) => ({ ...s, frequency, rangeType: defaultRange(frequency) }));
+              }}
+            >
+              <option value="manual">Manual only</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </section>
 
           <section className="rounded-xl border bg-white p-4 space-y-3">
             <div className="text-sm font-semibold text-slate-800">Schedule</div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <label className="block text-sm">
-                <div className="text-xs text-slate-500 mb-1">Day</div>
-                <select
-                  className="w-full border rounded-lg px-2 py-2"
-                  value={settings.sendDay}
-                  onChange={(e) => setSettings((s) => ({ ...s, sendDay: e.target.value }))}
-                >
-                  {WEEKDAYS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm">
-                <div className="text-xs text-slate-500 mb-1">Time</div>
-                <input
-                  type="time"
-                  className="w-full border rounded-lg px-2 py-2"
-                  value={settings.sendTime}
-                  step={60}
-                  onChange={(e) => setSettings((s) => ({ ...s, sendTime: normalizeTime(e.target.value) }))}
-                />
-              </label>
+              {settings.frequency === "weekly" && (
+                <label className="block text-sm">
+                  <div className="text-xs text-slate-500 mb-1">Day</div>
+                  <select
+                    className="w-full border rounded-lg px-2 py-2"
+                    value={settings.sendDay}
+                    onChange={(e) => setSettings((s) => ({ ...s, sendDay: e.target.value }))}
+                  >
+                    {WEEKDAYS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {settings.frequency === "monthly" && (
+                <label className="block text-sm">
+                  <div className="text-xs text-slate-500 mb-1">Day of month</div>
+                  <select
+                    className="w-full border rounded-lg px-2 py-2"
+                    value={settings.sendDayOfMonth}
+                    onChange={(e) => setSettings((s) => ({ ...s, sendDayOfMonth: Number(e.target.value) }))}
+                  >
+                    {MONTH_DAYS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {settings.frequency !== "manual" && (
+                <label className="block text-sm">
+                  <div className="text-xs text-slate-500 mb-1">Time</div>
+                  <input
+                    type="time"
+                    className="w-full border rounded-lg px-2 py-2"
+                    value={settings.sendTime}
+                    step={60}
+                    onChange={(e) => setSettings((s) => ({ ...s, sendTime: normalizeTime(e.target.value) }))}
+                  />
+                </label>
+              )}
               <label className="block text-sm">
                 <div className="text-xs text-slate-500 mb-1">Timezone</div>
                 <select
@@ -455,47 +677,82 @@ export function EmailAutomationView({
                 </select>
               </label>
             </div>
-          </section>
-
-          <section className="rounded-xl border bg-white p-4 space-y-3">
-            <div className="text-sm font-semibold text-slate-800">Reporting range</div>
-            <label className="block text-sm">
-              <div className="text-xs text-slate-500 mb-1">Window</div>
-              <select
-                className="w-full border rounded-lg px-2 py-2"
-                value={settings.rangeType}
-                onChange={(e) =>
-                  setSettings((s) => ({ ...s, rangeType: e.target.value as WeeklyReportSettings["rangeType"] }))
-                }
-              >
-                <option value="week_to_send">Start of week through send time</option>
-                <option value="last_7_days">Last 7 days</option>
-                <option value="custom_weekly" disabled>
-                  Custom weekly range (not yet supported)
-                </option>
-              </select>
-            </label>
-            {settings.rangeType === "custom_weekly" && (
-              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                Custom weekly range is not supported yet. It needs its own end weekday, separate from send day. Use Start of week through send time, and set Week starts on to the first day of your window.
+            {settings.frequency === "monthly" && (
+              <div className="text-xs text-slate-500">
+                If you choose 31 and a month has fewer days, the report sends on the last day of that month.
               </div>
             )}
-            {settings.rangeType !== "last_7_days" && (
+            {isManualFrequency && (
+              <div className="text-xs text-slate-500">Timezone is used for Manual Report dates and previews.</div>
+            )}
+          </section>
+
+          {!isManualFrequency && (
+            <section className="rounded-xl border bg-white p-4 space-y-3">
+              <div className="text-sm font-semibold text-slate-800">Reporting range</div>
               <label className="block text-sm">
-                <div className="text-xs text-slate-500 mb-1">Week starts on</div>
+                <div className="text-xs text-slate-500 mb-1">Window</div>
                 <select
                   className="w-full border rounded-lg px-2 py-2"
-                  value={settings.rangeStartDay}
-                  onChange={(e) => setSettings((s) => ({ ...s, rangeStartDay: e.target.value }))}
+                  value={settings.rangeType}
+                  onChange={(e) => setSettings((s) => ({ ...s, rangeType: e.target.value as RangeType }))}
                 >
-                  {WEEKDAYS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
+                  {settings.frequency === "daily" && (
+                    <>
+                      <option value="today_to_send">Today through send time</option>
+                      <option value="previous_day">Previous completed day</option>
+                      <option value="last_24_hours">Last 24 hours</option>
+                    </>
+                  )}
+                  {settings.frequency === "weekly" && (
+                    <>
+                      <option value="week_to_send">Start of week through send time</option>
+                      <option value="last_7_days">Last 7 days</option>
+                      <option value="custom_weekly" disabled>
+                        Custom weekly range (not yet supported)
+                      </option>
+                    </>
+                  )}
+                  {settings.frequency === "monthly" && (
+                    <>
+                      <option value="previous_month">Previous completed calendar month</option>
+                      <option value="month_to_date">Month to date through send time</option>
+                      <option value="last_30_days">Last 30 days</option>
+                    </>
+                  )}
                 </select>
               </label>
-            )}
+              {settings.frequency === "weekly" && settings.rangeType === "week_to_send" && (
+                <label className="block text-sm">
+                  <div className="text-xs text-slate-500 mb-1">Week starts on</div>
+                  <select
+                    className="w-full border rounded-lg px-2 py-2"
+                    value={settings.rangeStartDay}
+                    onChange={(e) => setSettings((s) => ({ ...s, rangeStartDay: e.target.value }))}
+                  >
+                    {WEEKDAYS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </section>
+          )}
+
+          <section className="rounded-xl border bg-white p-4 space-y-3">
+            <div className="text-sm font-semibold text-slate-800">Subject</div>
+            <input
+              type="text"
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+              maxLength={MAX_SUBJECT}
+              value={settings.subjectTemplate}
+              onChange={(e) => setSettings((s) => ({ ...s, subjectTemplate: e.target.value }))}
+            />
+            <div className="text-xs text-slate-500">
+              Placeholders: {"{startDate}"}, {"{endDate}"}, {"{reportDate}"}, {"{frequency}"}. Preview shows the filled-in subject.
+            </div>
           </section>
 
           <section className="rounded-xl border bg-white p-4 space-y-3">
@@ -510,32 +767,29 @@ export function EmailAutomationView({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    addRecipient();
+                    addToList(settings.recipientEmails, recipientDraft, (next) => setSettings((s) => ({ ...s, recipientEmails: next })), setRecipientDraft);
                   }
                 }}
               />
               <button
                 type="button"
                 className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50"
-                onClick={addRecipient}
+                onClick={() =>
+                  addToList(settings.recipientEmails, recipientDraft, (next) => setSettings((s) => ({ ...s, recipientEmails: next })), setRecipientDraft)
+                }
               >
                 Add
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
-              {settings.recipientEmails.length === 0 && (
-                <div className="text-sm text-slate-500">No recipients yet.</div>
-              )}
+              {settings.recipientEmails.length === 0 && <div className="text-sm text-slate-500">No recipients yet.</div>}
               {settings.recipientEmails.map((email) => (
-                <span
-                  key={email}
-                  className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-700 text-sm px-3 py-1"
-                >
+                <span key={email} className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-700 text-sm px-3 py-1">
                   {email}
                   <button
                     type="button"
                     className="text-slate-500 hover:text-slate-800"
-                    onClick={() => removeRecipient(email)}
+                    onClick={() => setSettings((s) => ({ ...s, recipientEmails: s.recipientEmails.filter((x) => x !== email) }))}
                     aria-label={`Remove ${email}`}
                   >
                     ×
@@ -554,14 +808,12 @@ export function EmailAutomationView({
               value={settings.replyToEmail}
               onChange={(e) => setSettings((s) => ({ ...s, replyToEmail: e.target.value }))}
             />
-            <div className="text-xs text-slate-500">Optional. Used as Reply-To for Send Report Now. Leave blank to omit it.</div>
+            <div className="text-xs text-slate-500">Optional. Used for scheduled sends, Send Report Now, and Manual Report.</div>
           </section>
 
           <section className="rounded-xl border bg-white p-4 space-y-1">
             <div className="text-sm font-semibold text-slate-800">Sender</div>
-            <div className="text-sm text-slate-700">
-              {fromEmail ? `Sender: ${fromEmail}` : "Sender: Configured by system"}
-            </div>
+            <div className="text-sm text-slate-700">{fromEmail ? `Sender: ${fromEmail}` : "Sender: Configured by system"}</div>
             <div className="text-xs text-slate-500">The From address is set on the server and cannot be changed here.</div>
           </section>
 
@@ -586,7 +838,7 @@ export function EmailAutomationView({
               type="button"
               className="px-3 py-2 rounded-lg text-sm font-medium border border-slate-400 text-slate-800 hover:bg-slate-50 disabled:opacity-60"
               onClick={sendTestEmail}
-              disabled={sendingTest || sendingNow}
+              disabled={sendingTest || sendingNow || manualSending}
             >
               {sendingTest ? "Sending…" : "Send Test Email"}
             </button>
@@ -594,73 +846,182 @@ export function EmailAutomationView({
               type="button"
               className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-900 text-white disabled:opacity-60"
               onClick={() => setConfirmSend(true)}
-              disabled={sendingTest || sendingNow || savedRecipientCount === 0}
+              disabled={sendingTest || sendingNow || savedRecipientCount === 0 || isManualFrequency}
             >
               Send Report Now
             </button>
           </div>
           <div className="text-xs text-slate-500">
-            Preview and both send actions use the last saved reporting range and timezone. Send Test Email goes only to the configured test inbox. Send Report Now goes to the saved recipient list and uses the saved Reply-To.
+            {isManualFrequency
+              ? "Send Report Now is turned off for Manual frequency. Use Manual Report below for custom dates."
+              : "Send Report Now uses the saved schedule, range, subject, recipients, and Reply-To. It does not block the next scheduled send. Send Test Email goes only to the configured test inbox."}
           </div>
         </div>
 
         <aside className="min-w-0 md:sticky md:top-20">
-          <div className="rounded-xl border bg-slate-100 p-3 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-800">Email preview</div>
-                <div className="text-xs text-slate-500 break-words">
-                  {preview
-                    ? [preview.subject, preview.rangeLabel, `${preview.noteCount} notes`].filter(Boolean).join(" · ")
-                    : "Same content as the weekly email."}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium border border-indigo-600 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 bg-white"
-                onClick={() => refreshPreview()}
-                disabled={previewing}
-              >
-                {previewing ? "Refreshing…" : "Refresh Preview"}
-              </button>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-              {previewing && !preview && (
-                <div className="p-6 text-sm text-slate-500">Building the weekly email preview…</div>
-              )}
-              {!previewing && previewError && !preview && (
-                <div className="p-6 text-sm text-slate-600">{previewError}</div>
-              )}
-              {!previewing && !preview && !previewError && (
-                <div className="p-6 text-sm text-slate-500">
-                  Click Refresh Preview to see the weekly email. This uses the saved reporting range and does not send anything.
-                </div>
-              )}
-              {preview?.html && (
-                <iframe
-                  title="Weekly email preview"
-                  sandbox=""
-                  srcDoc={preview.html}
-                  className="w-full bg-white block"
-                  style={{ height: "min(78vh, 920px)", border: 0 }}
-                />
-              )}
-            </div>
-          </div>
+          <PreviewFrame
+            title="Scheduled Report Preview"
+            previewing={previewing}
+            preview={preview}
+            previewError={previewError}
+            emptyHint="Click Refresh Preview to see the saved scheduled report. This uses the last saved settings and does not send anything."
+            onRefresh={() => refreshPreview()}
+            refreshLabel="Refresh Preview"
+          />
         </aside>
       </div>
+
+      <section className="rounded-xl border bg-white p-4 space-y-4">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">Manual Report</div>
+          <div className="text-xs text-slate-500 mt-1">
+            Send a one-off report for any date range. Temporary recipients are not saved to the scheduled recipient list.
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block text-sm">
+            <div className="text-xs text-slate-500 mb-1">From date</div>
+            <input type="date" className="w-full border rounded-lg px-2 py-2" value={manualFrom} onChange={(e) => setManualFrom(e.target.value)} />
+          </label>
+          <label className="block text-sm">
+            <div className="text-xs text-slate-500 mb-1">To date</div>
+            <input type="date" className="w-full border rounded-lg px-2 py-2" value={manualTo} onChange={(e) => setManualTo(e.target.value)} />
+          </label>
+        </div>
+        <label className="block text-sm">
+          <div className="text-xs text-slate-500 mb-1">Subject</div>
+          <input
+            type="text"
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+            maxLength={MAX_SUBJECT}
+            value={manualSubject}
+            onChange={(e) => setManualSubject(e.target.value)}
+          />
+        </label>
+        <div className="space-y-2">
+          <div className="text-xs text-slate-500">Recipients</div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="radio" checked={manualUseSaved} onChange={() => setManualUseSaved(true)} />
+            Use saved recipients ({savedRecipientCount})
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="radio" checked={!manualUseSaved} onChange={() => setManualUseSaved(false)} />
+            Temporary list
+          </label>
+          {!manualUseSaved && (
+            <>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="email"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="name@company.com"
+                  value={manualDraft}
+                  onChange={(e) => setManualDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addToList(manualRecipients, manualDraft, setManualRecipients, setManualDraft);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50"
+                  onClick={() => addToList(manualRecipients, manualDraft, setManualRecipients, setManualDraft)}
+                >
+                  Add
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {manualRecipients.length === 0 && <div className="text-sm text-slate-500">No temporary recipients yet.</div>}
+                {manualRecipients.map((email) => (
+                  <span key={email} className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-700 text-sm px-3 py-1">
+                    {email}
+                    <button type="button" className="text-slate-500 hover:text-slate-800" onClick={() => setManualRecipients((list) => list.filter((x) => x !== email))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg text-sm font-medium border border-indigo-600 text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+            onClick={() => previewManual()}
+            disabled={manualPreviewing}
+          >
+            {manualPreviewing ? "Refreshing…" : "Preview Manual Report"}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-900 text-white disabled:opacity-60"
+            onClick={() => setConfirmManual(true)}
+            disabled={manualSending || manualRecipientCount === 0}
+          >
+            Send Manual Report
+          </button>
+        </div>
+        <PreviewFrame
+          title="Manual Report Preview"
+          previewing={manualPreviewing}
+          preview={manualPreview}
+          previewError={manualPreviewError}
+          emptyHint="Click Preview Manual Report to build this custom date range. It does not change saved settings."
+          onRefresh={() => previewManual()}
+          refreshLabel="Preview Manual Report"
+        />
+      </section>
+
+      {recentRuns.length > 0 && (
+        <section className="rounded-xl border bg-white p-4 space-y-2">
+          <div className="text-sm font-semibold text-slate-800">Recent activity</div>
+          <div className="divide-y divide-slate-100">
+            {recentRuns.slice(0, 8).map((run) => (
+              <div key={run.id} className="py-2 first:pt-0 last:pb-0 text-xs text-slate-600 space-y-0.5">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span className="font-medium text-slate-800">{statusLabel(run.status)}</span>
+                  <span>·</span>
+                  <span>{run.source === "manual" ? "Manual" : "Scheduled"}</span>
+                  {frequencyLabel(run.frequency) && (
+                    <>
+                      <span>·</span>
+                      <span>{frequencyLabel(run.frequency)}</span>
+                    </>
+                  )}
+                  {run.recipientCount != null && (
+                    <>
+                      <span>·</span>
+                      <span>
+                        {run.recipientCount} {run.recipientCount === 1 ? "recipient" : "recipients"}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {run.rangeType && <div>Range: {rangeLabel(run.rangeType, settings.rangeStartDay)}</div>}
+                <div>Scheduled: {formatWhen(run.scheduledFor, settings.timezone)}</div>
+                {run.sentAt && <div>Sent: {formatWhen(run.sentAt, settings.timezone)}</div>}
+                {run.status === "failed" && run.errorMessage && <div className="text-red-700">{run.errorMessage}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {confirmSend && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/40" onClick={() => !sendingNow && setConfirmSend(false)} />
           <div className="absolute inset-0 flex items-center justify-center p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-xl p-5 space-y-4">
-              <div className="text-lg font-semibold text-slate-800">Send this weekly report now?</div>
+              <div className="text-lg font-semibold text-slate-800">Send the saved report now?</div>
               <p className="text-sm text-slate-600">
-                Send this weekly report to {savedRecipientCount} {savedRecipientCount === 1 ? "recipient" : "recipients"} now?
+                Send this {frequencyLabel(settings.frequency).toLowerCase()} report to {savedRecipientCount}{" "}
+                {savedRecipientCount === 1 ? "recipient" : "recipients"} now?
               </p>
               <p className="text-xs text-slate-500">
-                This uses the saved recipient list, saved Reply-To, and the same email shown in the preview. It does not use the test inbox. A manual send does not replace the scheduled weekly send.
+                This uses the saved recipient list, saved Reply-To, and the scheduled report preview. It does not replace the next automatic send.
               </p>
               <div className="flex flex-wrap justify-end gap-2">
                 <button
@@ -678,6 +1039,41 @@ export function EmailAutomationView({
                   disabled={sendingNow}
                 >
                   {sendingNow ? "Sending…" : "Send Report Now"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmManual && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !manualSending && setConfirmManual(false)} />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white shadow-xl p-5 space-y-4">
+              <div className="text-lg font-semibold text-slate-800">Send this manual report?</div>
+              <p className="text-sm text-slate-600">
+                Send {manualFrom} through {manualTo} to {manualRecipientCount} {manualRecipientCount === 1 ? "recipient" : "recipients"}?
+              </p>
+              <p className="text-xs text-slate-500">
+                Temporary recipients are not saved. This does not change scheduled automation.
+              </p>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg text-sm border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  onClick={() => setConfirmManual(false)}
+                  disabled={manualSending}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-900 text-white disabled:opacity-60"
+                  onClick={sendManual}
+                  disabled={manualSending}
+                >
+                  {manualSending ? "Sending…" : "Send Manual Report"}
                 </button>
               </div>
             </div>

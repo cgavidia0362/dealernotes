@@ -1,11 +1,12 @@
-// /api/weekly-report-send.ts
-// Admin-only manual production send to saved recipient_emails. Independent of scheduled uniqueness.
+// /api/weekly-report-manual-send.ts
+// Admin-only custom-date send. Temporary recipients are not saved to settings.
 import { getBearerToken, requireAdmin } from "./_lib/authAdmin.js";
+import { parseManualReportInput } from "./_lib/manualReport.js";
 import { looksLikeEmail, requiredEnv, sendResendEmail } from "./_lib/resendWeekly.js";
 import { HttpError, InsightsModelError, InsightsTimeoutError } from "./_lib/types.js";
 import { buildWeeklyActivityReport } from "./_lib/weeklyActivity.js";
 import { recordManualRun } from "./_lib/weeklyReportRuns.js";
-import { loadWeeklyReportSettings, productionRecipients, productionReplyTo } from "./_lib/weeklyReportSettings.js";
+import { loadWeeklyReportSettings, productionReplyTo } from "./_lib/weeklyReportSettings.js";
 
 export const config = { maxDuration: 60 };
 
@@ -19,7 +20,7 @@ export default async function handler(req: any, res: any) {
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
     if (body.confirm !== true) {
-      return res.status(400).json({ error: "Confirmation is required to send the weekly report." });
+      return res.status(400).json({ error: "Confirmation is required to send a manual report." });
     }
 
     if (!process.env.OPENAI_API_KEY) {
@@ -32,15 +33,13 @@ export default async function handler(req: any, res: any) {
     }
 
     const settings = await loadWeeklyReportSettings();
-    if (settings.frequency === "manual") {
-      return res.status(400).json({
-        error: "Frequency is Manual. Use Manual Report to send a custom date range.",
-      });
-    }
-    const to = productionRecipients(settings);
+    const parsed = parseManualReportInput(body, settings);
     const replyTo = productionReplyTo(settings);
-
-    const result = await buildWeeklyActivityReport();
+    const result = await buildWeeklyActivityReport({
+      window: parsed.window,
+      subjectTemplate: parsed.subjectTemplate,
+      frequency: "manual",
+    });
     if (!result.notes.length) {
       return res.status(400).json({
         error: "No notes in this reporting window.",
@@ -52,7 +51,7 @@ export default async function handler(req: any, res: any) {
     try {
       sent = await sendResendEmail({
         from,
-        to,
+        to: parsed.to,
         replyTo,
         subject: result.email.subject,
         html: result.email.html,
@@ -63,9 +62,10 @@ export default async function handler(req: any, res: any) {
         status: "failed",
         reportStart: result.window.startISO,
         reportEnd: result.window.endISO,
-        recipientCount: to.length,
-        frequency: settings.frequency,
-        rangeType: settings.rangeType,
+        recipientCount: parsed.to.length,
+        frequency: "manual",
+        rangeType: "custom",
+        subject: result.email.subject,
         errorMessage: e instanceof HttpError ? e.message : e?.message || "Send failed.",
       });
       throw e;
@@ -75,21 +75,22 @@ export default async function handler(req: any, res: any) {
       status: "sent",
       reportStart: result.window.startISO,
       reportEnd: result.window.endISO,
-      recipientCount: to.length,
+      recipientCount: parsed.to.length,
       resendMessageId: sent.id,
-      frequency: settings.frequency,
-      rangeType: settings.rangeType,
+      frequency: "manual",
+      rangeType: "custom",
       subject: result.email.subject,
     });
 
     return res.status(200).json({
       ok: true,
       format: "week-at-a-glance+rep-activity",
-      message: `Report sent to ${to.length} ${to.length === 1 ? "recipient" : "recipients"}.`,
-      recipientCount: to.length,
+      message: `Manual report sent to ${parsed.to.length} ${parsed.to.length === 1 ? "recipient" : "recipients"}.`,
+      recipientCount: parsed.to.length,
       reportingWindow: result.window,
+      subject: result.email.subject,
       noteCount: result.counts.noteCount,
-      schedulingActive: true,
+      savedRecipientsUnchanged: true,
     });
   } catch (e: any) {
     if (e instanceof HttpError) return res.status(e.status).json({ error: e.message, ...(e.details || {}) });
