@@ -96,13 +96,24 @@ type Dealer = {
   };
 };
 
-/** Empty regions for a state means the rep covers every dealer in that state. */
-function repCoversDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
+/** State-only coverage grants access, but does not assign the dealer to the rep. */
+function repCanAccessDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
   if (!rep || !dealer) return false;
   if (dealer.assignedRepUsername && dealer.assignedRepUsername === rep.username) return true;
   if (!Array.isArray(rep.states) || !rep.states.includes(dealer.state)) return false;
   const regionsForState = rep.regionsByState?.[dealer.state] || [];
   if (regionsForState.length === 0) return true;
+  return regionsForState.includes(dealer.region);
+}
+
+/** Shown as this dealer’s Rep: manual assignment or a specific region only. */
+function repAssignedToDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
+  if (!rep || !dealer) return false;
+  if (dealer.assignedRepUsername && dealer.assignedRepUsername === rep.username) return true;
+  if (dealer.assignedRepUsername && dealer.assignedRepUsername !== rep.username) return false;
+  if (!Array.isArray(rep.states) || !rep.states.includes(dealer.state)) return false;
+  const regionsForState = rep.regionsByState?.[dealer.state] || [];
+  if (regionsForState.length === 0) return false;
   return regionsForState.includes(dealer.region);
 }
 
@@ -1229,7 +1240,7 @@ const copyHomeInsights = async () => {
       return users.find((x) => x.username === d.assignedRepUsername)?.name || d.assignedRepUsername;
     }
     const covering = users.filter(
-      (u) => u.role === "Rep" && repCoversDealer(u, d)
+      (u) => u.role === "Rep" && repAssignedToDealer(u, d)
     );
     if (covering.length === 1) return covering[0].name;
     if (covering.length > 1) return covering.map((x) => x.name).join(", ");
@@ -1242,7 +1253,7 @@ const copyHomeInsights = async () => {
     const repCanSeeDealer = (d: Dealer): boolean => {
       if (!isRep || !session) return true;
       const me = users.find(u => u.username === session.username);
-      return repCoversDealer(me, d);
+      return repCanAccessDealer(me, d);
     };
     
     return dealers
@@ -1260,7 +1271,7 @@ const copyHomeInsights = async () => {
           } else {
             const repUser = users.find((u) => u.username === fRep);
             if (!repUser) return false;
-            const covers = repCoversDealer(repUser, d);
+            const covers = repAssignedToDealer(repUser, d);
             if (!covers) return false;
           }
         }
@@ -1279,7 +1290,7 @@ const copyHomeInsights = async () => {
       .filter((d) => {
         if (!isRep || !session) return true;
         const me = users.find(u => u.username === session.username);
-        return repCoversDealer(me, d);
+        return repCanAccessDealer(me, d);
       })
     .sort((a, b) => {
       // CHANGE 2: Dealers with no lastVisited (new dealers) float to top
@@ -2350,7 +2361,7 @@ const DealerNotesView: React.FC<{
   const isRep = role === "Rep";
 
   const assignedToMe = isRep && dealer.assignedRepUsername === session?.username;
-  const repCanAccess = Boolean(isAdminManager || assignedToMe || (isRep && repCoversDealer(me, dealer)));
+  const repCanAccess = Boolean(isAdminManager || assignedToMe || (isRep && repCanAccessDealer(me, dealer)));
 
   /* -------------------------- Status / Details ------------------------- */
   const updateDealer = async (patch: Partial<Dealer>) => {
@@ -3399,7 +3410,7 @@ const RepReportsView: React.FC<{
   const hasReport = reportUrl && reportUrl.trim().length > 0;
 
   // Filter dealers that belong to this rep (explicit assignment OR territory)
-  const myDealers = dealers.filter((d) => repCoversDealer(session, d));
+  const myDealers = dealers.filter((d) => repAssignedToDealer(session, d));
 
   // Export dealers to CSV
   const exportDealers = () => {
@@ -3679,14 +3690,14 @@ const ReportingView: React.FC<{
       const u = users.find((r) => r.username === d.assignedRepUsername);
       if (u) return u;
     }
-    return reps.find((r) => repCoversDealer(r, d)) || null;
+    return reps.find((r) => repAssignedToDealer(r, d)) || null;
   };
 
   // Dealers considered in current view
   const scopedDealers = useMemo(() => {
     if (repFilter === "ALL") return dealers;
     if (!selectedRep) return [];
-    return dealers.filter((d) => repCoversDealer(selectedRep, d));
+    return dealers.filter((d) => repAssignedToDealer(selectedRep, d));
   }, [dealers, repFilter, selectedRep]);
 
   const statuses: DealerStatus[] = ["Active", "Pending", "Prospect", "Inactive", "Black Listed"];
@@ -4316,7 +4327,7 @@ const monthlyVisits = useMemo(() => {
             {(repFilter === "ALL"
               ? reps.map((r) => ({
                   rep: r,
-                  count: dealers.filter((d) => repCoversDealer(r, d)).length,
+                  count: dealers.filter((d) => repAssignedToDealer(r, d)).length,
                 }))
               : [{ rep: selectedRep!, count: scopedDealers.length }]
             )
@@ -4324,7 +4335,7 @@ const monthlyVisits = useMemo(() => {
               .map((row) => (
                 <div key={row.rep.username} className="flex items-center gap-3">
                   <div className="w-40 text-sm">{`${row.rep.name} (${row.rep.username})`}</div>
-                  <div className="flex-1">{bar(row.count, Math.max(...reps.map((r) => dealers.filter((d) => repCoversDealer(r, d)).length), 1))}</div>
+                  <div className="flex-1">{bar(row.count, Math.max(...reps.map((r) => dealers.filter((d) => repAssignedToDealer(r, d)).length), 1))}</div>
                   <div className="w-10 text-right text-sm">{row.count}</div>
                 </div>
               ))}
@@ -5067,7 +5078,7 @@ const moveDealers = async () => {
       const u = users.find((x) => x.username === d.assignedRepUsername);
       return u ? u.name : d.assignedRepUsername;
     }
-    const covering = users.filter((u) => u.role === "Rep" && repCoversDealer(u, d));
+    const covering = users.filter((u) => u.role === "Rep" && repAssignedToDealer(u, d));
     return covering.length ? covering.map((x) => x.name).join(", ") : "—";
   };
 
@@ -7436,7 +7447,7 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     const accessibleDealers = useMemo(() => {
       if (isAdminManager) return dealers; // Admins/Managers see all dealers, same as rest of the app
       if (!me) return [] as Dealer[];
-      const can = (d: Dealer) => isAdminManager || repCoversDealer(me, d);
+      const can = (d: Dealer) => isAdminManager || repCanAccessDealer(me, d);
       return dealers.filter(can);
     }, [dealers, me, isAdminManager]);
 
