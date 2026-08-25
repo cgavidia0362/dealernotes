@@ -197,36 +197,62 @@ export function renderWeeklyActivityEmail(input: WeeklyReportEmailInput): Weekly
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(subject)}</title>
+  <!--[if !mso]><!-->
+  <style>
+    @media only screen and (max-width: 620px) {
+      .email-shell { width: 100% !important; max-width: 100% !important; }
+      .email-pad { padding-left: 16px !important; padding-right: 16px !important; }
+    }
+  </style>
+  <!--<![endif]-->
 </head>
 <body style="margin:0;padding:0;background:#f8fafc;-webkit-text-size-adjust:100%;">
   <!-- format:week-at-a-glance+rep-activity -->
-  <div style="width:100%;background:#f8fafc;padding:20px 12px;">
-    <div style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;">
-      <div style="padding:24px 20px 20px 20px;border-bottom:3px solid #1e3a8a;">
-        <div style="font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">
-          ${escapeHtml(title)}
-        </div>
-      </div>
-      <div style="padding:20px 20px 8px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        <div style="font-size:12px;letter-spacing:0.04em;text-transform:uppercase;color:#64748b;margin:0 0 6px 0;">Reporting Period</div>
-        <div style="font-size:16px;line-height:1.4;color:#0f172a;margin:0 0 12px 0;">${escapeHtml(period)}</div>
-        <div style="font-size:14px;line-height:1.4;color:#475569;">${escapeHtml(totals)}</div>
-      </div>
-      <div style="padding:24px 20px 8px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 12px 0;">${escapeHtml(glanceHeading)}</div>
-        <ul style="margin:0;padding:0 0 0 20px;">
-          ${glanceHtml}
-        </ul>
-      </div>
-      <div style="padding:28px 20px 24px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-        <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 18px 0;">Rep Activity</div>
-        ${repsHtml}
-      </div>
-      <div style="padding:18px 20px 24px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;line-height:1.45;color:#64748b;border-top:1px solid #e2e8f0;">
-        ${escapeHtml(footer)}
-      </div>
-    </div>
-  </div>
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background:#f8fafc;">
+    <tr>
+      <td align="center" style="padding:20px 12px;background:#f8fafc;">
+        <!--[if mso]>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="900" align="center"><tr><td width="900" valign="top">
+        <![endif]-->
+        <table role="presentation" class="email-shell" cellpadding="0" cellspacing="0" border="0" width="100%" align="center" style="width:100%;max-width:900px;margin:0 auto;border-collapse:collapse;background:#ffffff;border:1px solid #e2e8f0;">
+          <tr>
+            <td class="email-pad" style="padding:28px 32px 24px 32px;border-bottom:3px solid #1e3a8a;font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:1.3;color:#0f172a;font-weight:700;">
+              ${escapeHtml(title)}
+            </td>
+          </tr>
+          <tr>
+            <td class="email-pad" style="padding:24px 32px 12px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              <div style="font-size:12px;letter-spacing:0.04em;text-transform:uppercase;color:#64748b;margin:0 0 6px 0;">Reporting Period</div>
+              <div style="font-size:16px;line-height:1.4;color:#0f172a;margin:0 0 12px 0;">${escapeHtml(period)}</div>
+              <div style="font-size:14px;line-height:1.4;color:#475569;">${escapeHtml(totals)}</div>
+            </td>
+          </tr>
+          <tr>
+            <td class="email-pad" style="padding:28px 32px 12px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 12px 0;">${escapeHtml(glanceHeading)}</div>
+              <ul style="margin:0;padding:0 0 0 20px;">
+                ${glanceHtml}
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td class="email-pad" style="padding:32px 32px 28px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+              <div style="font-size:13px;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:#1e3a8a;margin:0 0 18px 0;">Rep Activity</div>
+              ${repsHtml}
+            </td>
+          </tr>
+          <tr>
+            <td class="email-pad" style="padding:20px 32px 28px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;line-height:1.45;color:#64748b;border-top:1px solid #e2e8f0;">
+              ${escapeHtml(footer)}
+            </td>
+          </tr>
+        </table>
+        <!--[if mso]>
+        </td></tr></table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
 </body>
 </html>`;
 

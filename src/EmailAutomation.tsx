@@ -204,13 +204,15 @@ function PreviewFrame({
               <div className="text-xs text-slate-500">Subject</div>
               <div className="text-sm font-medium text-slate-800 break-words">{preview.subject}</div>
             </div>
-            <iframe
-              title={preview.subject || title}
-              sandbox=""
-              srcDoc={preview.html}
-              className="w-full bg-white block"
-              style={{ height: "min(78vh, 920px)", border: 0 }}
-            />
+            <div className="overflow-x-auto bg-slate-50">
+              <iframe
+                title={preview.subject || title}
+                sandbox=""
+                srcDoc={preview.html}
+                className="bg-white block"
+                style={{ height: "min(78vh, 920px)", border: 0, width: "100%", minWidth: 900 }}
+              />
+            </div>
           </>
         )}
       </div>
