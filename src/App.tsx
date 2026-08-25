@@ -95,6 +95,24 @@ type Dealer = {
     other?: string;
   };
 };
+
+/** Empty regions for a state means the rep covers every dealer in that state. */
+function repCoversDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
+  if (!rep || !dealer) return false;
+  if (dealer.assignedRepUsername && dealer.assignedRepUsername === rep.username) return true;
+  if (!Array.isArray(rep.states) || !rep.states.includes(dealer.state)) return false;
+  const regionsForState = rep.regionsByState?.[dealer.state] || [];
+  if (regionsForState.length === 0) return true;
+  return regionsForState.includes(dealer.region);
+}
+
+async function adminAuthHeaders(): Promise<Record<string, string> | null> {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) return null;
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
 /* ----------------- Note type (extended for optimistic UI) ----------------- */
 type NoteCategory = "Visit" | "Problem" | "Other" | "Manager";
 type Note = {
@@ -556,10 +574,10 @@ const LoginView: React.FC<{
         <h1 className="text-2xl font-semibold text-white text-center mb-6">Dealer Notes Portal</h1>
         <form onSubmit={handle} className="space-y-4">
           <div>
-            <label className="block text-sm mb-1">Username</label>
+            <label className="block text-sm mb-1">Email or username</label>
             <input
               className="w-full rounded-lg bg-slate-700 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter username"
+              placeholder="Enter your work email"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
@@ -576,34 +594,35 @@ const LoginView: React.FC<{
               autoComplete="current-password"
             />
           </div>
-          <div className="flex justify-end">
+          <div className="flex flex-col items-end gap-1">
             <button
               type="button"
               className="text-sm text-blue-400 hover:underline"
               onClick={async () => {
-                // We treat the "Username" field as the email for now
                 const email = username.trim().toLowerCase();
                 if (!email || !email.includes("@")) {
-                  showToast("Type your email above first.", "error");
+                  showToast("Enter your work email above, then click Forgot password.", "error");
                   return;
                 }
-
-                // In StackBlitz stub this may not exist; guard it
-                const canReset =
-                  typeof (supabase as any)?.auth?.resetPasswordForEmail === "function";
-                if (!canReset) {
-                  showToast("This works on the live site with Supabase keys.", "error");
-                  return;
+                try {
+                  const resp = await fetch("/api/send-auth-email", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email }),
+                  });
+                  if (!resp.ok) {
+                    const json = await resp.json().catch(() => ({} as any));
+                    throw new Error(json?.error || "Could not send reset email.");
+                  }
+                  showToast("If that email has an account, a reset link is on the way.", "success");
+                } catch (e: any) {
+                  showToast(e?.message || "Could not send reset email.", "error");
                 }
-
-                const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
-                const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-                if (error) return showToast(error.message, "error");
-                showToast("Password reset email sent.", "success");
               }}
             >
               Forgot password?
             </button>
+            <div className="text-xs text-slate-400">Enter your work email, then click Forgot password.</div>
           </div>
           <button className={`w-full ${brand.primary} text-white font-medium rounded-lg px-4 py-2 focus:outline-none focus:ring-2`} type="submit">
             Log In
@@ -1210,7 +1229,7 @@ const copyHomeInsights = async () => {
       return users.find((x) => x.username === d.assignedRepUsername)?.name || d.assignedRepUsername;
     }
     const covering = users.filter(
-      (u) => u.role === "Rep" && u.states.includes(d.state) && (u.regionsByState[d.state]?.includes(d.region) ?? false)
+      (u) => u.role === "Rep" && repCoversDealer(u, d)
     );
     if (covering.length === 1) return covering[0].name;
     if (covering.length > 1) return covering.map((x) => x.name).join(", ");
@@ -1220,19 +1239,15 @@ const copyHomeInsights = async () => {
   // Derived filtered list (NOTE: override-only filter removed)
   const filtered = useMemo(() => {
     // Helper: Check if Rep covers this dealer (either explicit assignment OR territory)
-    const repCoversDealer = (d: Dealer): boolean => {
-      if (!isRep || !session) return true; // Admins/Managers see everything
+    const repCanSeeDealer = (d: Dealer): boolean => {
+      if (!isRep || !session) return true;
       const me = users.find(u => u.username === session.username);
-      if (!me) return false;
-      // Rep sees ALL dealers in any state they cover, regardless of assignment
-      if (me.states.includes(d.state)) return true;
-      return false;
+      return repCoversDealer(me, d);
     };
     
     return dealers
       .filter((d) => {
-        // CHANGE 1: Reps only see dealers they cover (assignment OR territory)
-        if (!repCoversDealer(d)) return false;
+        if (!repCanSeeDealer(d)) return false;
         
         if (q) {
           const s = q.toLowerCase();
@@ -1245,7 +1260,7 @@ const copyHomeInsights = async () => {
           } else {
             const repUser = users.find((u) => u.username === fRep);
             if (!repUser) return false;
-            const covers = repUser.states.includes(d.state) && (repUser.regionsByState[d.state]?.includes(d.region) ?? false);
+            const covers = repCoversDealer(repUser, d);
             if (!covers) return false;
           }
         }
@@ -1262,12 +1277,9 @@ const copyHomeInsights = async () => {
   const recentTop10 = useMemo(() => {
     return [...dealers]
       .filter((d) => {
-        if (!isRep || !session) return true; // Admins/Managers see everything
+        if (!isRep || !session) return true;
         const me = users.find(u => u.username === session.username);
-        if (!me) return false;
-        // Rep sees ALL dealers in any state they cover, regardless of assignment
-        if (me.states.includes(d.state)) return true;
-        return false;
+        return repCoversDealer(me, d);
       })
     .sort((a, b) => {
       // CHANGE 2: Dealers with no lastVisited (new dealers) float to top
@@ -2338,15 +2350,7 @@ const DealerNotesView: React.FC<{
   const isRep = role === "Rep";
 
   const assignedToMe = isRep && dealer.assignedRepUsername === session?.username;
-  const coversState = isRep && !!me?.states?.includes?.(dealer.state);
-  const coversRegion =
-    isRep &&
-    !!me?.regionsByState?.[dealer.state] &&
-    !!me?.regionsByState?.[dealer.state]?.includes?.(dealer.region);
-
-  // Reps can access any dealer in states they cover (state-level access, not region-specific)
-  const repHasCoverage = isRep && coversState;
-  const repCanAccess = Boolean(isAdminManager || assignedToMe || repHasCoverage);
+  const repCanAccess = Boolean(isAdminManager || assignedToMe || (isRep && repCoversDealer(me, dealer)));
 
   /* -------------------------- Status / Details ------------------------- */
   const updateDealer = async (patch: Partial<Dealer>) => {
@@ -3395,17 +3399,7 @@ const RepReportsView: React.FC<{
   const hasReport = reportUrl && reportUrl.trim().length > 0;
 
   // Filter dealers that belong to this rep (explicit assignment OR territory)
-  const myDealers = dealers.filter((d) => {
-    // Option 1: Explicit assignment
-    if (d.assignedRepUsername === session.username) return true;
-    
-    // Option 2: Territory coverage
-    if (session.states.includes(d.state) && (session.regionsByState[d.state]?.includes(d.region) ?? false)) {
-      return true;
-    }
-    
-    return false;
-  });
+  const myDealers = dealers.filter((d) => repCoversDealer(session, d));
 
   // Export dealers to CSV
   const exportDealers = () => {
@@ -3678,11 +3672,6 @@ const ReportingView: React.FC<{
   // NEW: Dealer List modal
   const [dlOpen, setDlOpen] = useState(false);
   const [nvSort, setNvSort] = useState<"longest" | "recent">("longest"); // longest = oldest visit first
-
-  // Helper: does rep "cover" dealer (override OR state/region coverage)
-  const repCoversDealer = (rep: User, d: Dealer) =>
-    d.assignedRepUsername === rep.username ||
-    (rep.states.includes(d.state) && (rep.regionsByState[d.state]?.includes(d.region) ?? false));
 
   // Helper: pick the rep for a dealer (prefer explicit override; otherwise first covering rep)
   const getRepForDealer = (d: Dealer): User | null => {
@@ -4629,6 +4618,8 @@ useEffect(() => {
 
   // ---------- Users table + modal ----------
   const [userModalOpen, setUserModalOpen] = useState(false);
+  const [savingUser, setSavingUser] = useState(false);
+  const [sendingInvite, setSendingInvite] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "", reportUrl: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
@@ -4646,45 +4637,11 @@ const [importPreview, setImportPreview] = useState<{
 } | null>(null);
 const [importPreviewOpen, setImportPreviewOpen] = useState(false);
 const [importMode, setImportMode] = useState<'all' | 'new' | 'updates'>('all');
-  // Invite state (only for Edit)
+  // Invite state
   const [inviteToken, setInviteToken] = useState<string>("");
   const inviteUrl = inviteToken
   ? (inviteToken.startsWith('http') ? inviteToken : `${location.origin}/reset?token=${inviteToken}`)
   : "";
-// -------- Force-Reset (opens after auth/callback?next=/reset) --------
-const [showForceReset, setShowForceReset] = useState(false);
-const [newPass, setNewPass] = useState('');
-const [newPass2, setNewPass2] = useState('');
-
-// 1) Open reset modal if Supabase put "type=recovery|invite|signup" in the hash
-useEffect(() => {
-  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const type = params.get('type');
-
-  if (type === 'recovery' || type === 'invite' || type === 'signup') {
-    setShowForceReset(true);
-
-    // Optional: clean the hash so refresh doesn't re-open it
-    const clean = new URL(window.location.href);
-    clean.hash = '';
-    window.history.replaceState({}, '', clean.toString());
-  }
-}, []);
-
-// 2) Also listen to Supabase auth events in case the library clears the hash too fast
-useEffect(() => {
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-    if (event === 'PASSWORD_RECOVERY') {
-      setShowForceReset(true);
-    } else if (event === 'SIGNED_IN') {
-      // Fallback: if we landed with a recovery hash and it just got processed
-      const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-      if (params.get('type') === 'recovery') setShowForceReset(true);
-    }
-  });
-
-  return () => subscription.unsubscribe();
-}, []);
 
   const openAddUser = () => {
     setEditingId(null);
@@ -4728,110 +4685,77 @@ useEffect(() => {
     });
   };
 
- // REPLACE the entire saveUser function with this
 const saveUser = async () => {
-  // 0) Basic validation
   if (!draft.name.trim() || !draft.username.trim()) {
     return showToast("Name and username are required.", "error");
   }
   const usernameTaken = users.some((u) => u.username === draft.username && u.id !== draft.id);
   if (usernameTaken) return showToast("Username already exists.", "error");
 
-  // Status from the radios (statusMap) or draft, default Active
   const chosenStatus: UserStatus =
     (statusMap[draft.username] as UserStatus) ||
-    ((draft as any).status as UserStatus) ||
+    (draft.status as UserStatus) ||
     "Active";
 
-  // If Email is empty and username is an email, use it
-  const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim();
-
-  // 1) Update the on-screen list immediately so UI reflects the change
-  if (editingId) {
-    setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...draft, status: chosenStatus } : u)));
-    setStatusMap((m) => ({ ...m, [draft.username]: chosenStatus }));
-    setUserModalOpen(false);
-  } else {
-    setUsers((prev) => [{ ...draft, status: chosenStatus }, ...prev]);
-    setStatusMap((m) => ({ ...m, [draft.username]: "Inactive" }));
-    setUserModalOpen(false);
+  const emailForProfile = (draft.email || (draft.username.includes("@") ? draft.username : "")).trim().toLowerCase();
+  if (!emailForProfile || !emailForProfile.includes("@")) {
+    return showToast("A valid email is required to save this user.", "error");
   }
 
-  // 2) Persist to Supabase
+  setSavingUser(true);
   try {
-    const isUUID = /^[0-9a-fA-F-]{36}$/.test(editingId || "");
-    let targetUserId: string | null = isUUID ? editingId! : null;
-
-    // 2a) Update basic profile fields (username/email/role/status)
-    if (emailForProfile) {
-      if (isUUID) {
-        const { error } = await supabase
-        .from("profiles")
-        .update({
-          username: draft.username,
-          email: emailForProfile || null,
-          role: draft.role,
-          status: chosenStatus,
-          name: draft.name,
-          report_url: draft.reportUrl || null,
-        })
-        .eq("id", editingId);        
-        if (error) throw error;
-      } else {
-   // Fallback: update by email and learn their id (tolerant of 0 rows)
-const { data, error, status } = await supabase
-.from("profiles")
-.update({
-  username: draft.username,
-  email: emailForProfile || null,
-  role: draft.role,
-  status: chosenStatus,
-  name: draft.name,
-  report_url: draft.reportUrl || null,
-})
-.eq("email", emailForProfile)
-.select("id")
-.maybeSingle();
-
-if (error) {
-// If PostgREST hints multiple rows, tell the admin (shouldn’t happen after uniqueness)
-showToast(error.message || "Profile update failed (email not unique?)", "error");
-} else if (!data) {
-// 0 rows updated: likely the invited user hasn’t created a profile yet
-// That’s OK. We’ll skip coverage for now; it will be saved after first login.
-showToast("User invited. Profile will appear after first login.", "success");
-targetUserId = null;
-} else {
-targetUserId = (data as any)?.id ?? null;
-}
-      }
+    const headers = await adminAuthHeaders();
+    if (!headers) {
+      showToast("Please log in again.", "error");
+      return;
     }
+    const resp = await fetch("/api/admin-upsert-user", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        id: draft.id,
+        name: draft.name.trim(),
+        username: draft.username.trim(),
+        email: emailForProfile,
+        role: draft.role,
+        status: chosenStatus,
+        phone: draft.phone || "",
+        reportUrl: draft.reportUrl || "",
+        states: draft.states || [],
+        regionsByState: draft.regionsByState || {},
+      }),
+    });
+    const json = await resp.json().catch(() => ({} as any));
+    if (!resp.ok) throw new Error(json?.error || "Failed to save user");
 
-    // 2b) Save Rep coverage (state+region) if we know their real user id
-    if (targetUserId) {
-      // Remove old coverage rows
-      const { error: delErr } = await supabase.from("rep_coverage").delete().eq("user_id", targetUserId);
-      if (delErr) throw delErr;
+    const saved: User = {
+      ...draft,
+      id: String(json.id || draft.id),
+      email: emailForProfile,
+      status: chosenStatus,
+    };
 
-      // Build rows from the modal selections
-      const rows: { user_id: string; state: string; region: string }[] = [];
-      for (const st of draft.states || []) {
-        const rgs = draft.regionsByState?.[st] || [];
-        for (const rg of rgs) {
-          rows.push({ user_id: targetUserId, state: st, region: rg });
-        }
+    setUsers((prev) => {
+      const idx = prev.findIndex(
+        (u) => u.id === editingId || u.id === saved.id || u.username === saved.username
+      );
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = saved;
+        return next;
       }
-
-      if (rows.length) {
-        const { error: upErr } = await supabase
-          .from("rep_coverage")
-          .upsert(rows, { onConflict: "user_id,state,region" });
-        if (upErr) throw upErr;
-      }
-    }
+      return [saved, ...prev];
+    });
+    setStatusMap((m) => ({ ...m, [saved.username]: chosenStatus }));
+    setDraft(saved);
+    setEditingId(saved.id);
+    setUserModalOpen(false);
+    showToast("User saved.", "success");
   } catch (err: any) {
     console.error(err);
     showToast(err?.message || "Failed to save to server.", "error");
+  } finally {
+    setSavingUser(false);
   }
 };
   // ---- NEW: Remove confirmation modal ----
@@ -4876,10 +4800,8 @@ targetUserId = (data as any)?.id ?? null;
     showToast('User removed.', 'success');
   };
 
-// Only in EDIT: Generate + Copy invite link via serverless API
 const generateInvite = async () => {
   try {
-    // get email from the new Email field; fall back to username only if it looks like an email
     const emailFromForm = (draft?.email || '').trim();
     const fallback = (draft?.username || '').trim();
     const email = emailFromForm || (fallback.includes('@') ? fallback : '');
@@ -4889,41 +4811,51 @@ const generateInvite = async () => {
       return;
     }
 
-   // Call the API route
-const r = await fetch('/api/generate-invite', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({
-    email,
-    metadata: { username: (draft.username || '').trim() }, // pass the admin-picked username
-  }),
-});
+    const headers = await adminAuthHeaders();
+    if (!headers) {
+      showToast('Please log in again.', 'error');
+      return;
+    }
 
-const json = (await r.json().catch(() => ({} as any))) as any;
-if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
+    setSendingInvite(true);
+    const r = await fetch('/api/generate-invite', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        email,
+        metadata: { username: (draft.username || '').trim() },
+      }),
+    });
 
-// Support multiple Supabase response shapes just in case
-const link: string | undefined =
-  json?.link ??
-  json?.data?.properties?.action_link ??
-  json?.data?.action_link ??
-  undefined;
+    const json = (await r.json().catch(() => ({} as any))) as any;
+    if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
+
+    const link: string | undefined =
+      json?.link ??
+      json?.data?.properties?.action_link ??
+      json?.data?.action_link ??
+      undefined;
 
     if (link) {
-      // store full link; the inviteUrl getter above will use it directly
       setInviteToken(link);
-
       try {
         await navigator.clipboard.writeText(link);
-        showToast('Invite link copied to clipboard.', 'success');
       } catch {
-        showToast('Invite created (copy failed). Link shown below.', 'success');
+        /* copy is optional backup */
       }
+      showToast(
+        json?.emailed
+          ? 'Invite email sent. Copy the link only as a backup — do not paste it into Teams.'
+          : 'Invite link copied to clipboard.',
+        'success'
+      );
     } else {
       showToast('Invite created but link missing.', 'error');
     }
   } catch (e: any) {
     showToast(e?.message || 'Invite failed', 'error');
+  } finally {
+    setSendingInvite(false);
   }
 };
 
@@ -5135,7 +5067,7 @@ const moveDealers = async () => {
       const u = users.find((x) => x.username === d.assignedRepUsername);
       return u ? u.name : d.assignedRepUsername;
     }
-    const covering = users.filter((u) => u.role === "Rep" && u.states.includes(d.state) && (u.regionsByState[d.state]?.includes(d.region) ?? false));
+    const covering = users.filter((u) => u.role === "Rep" && repCoversDealer(u, d));
     return covering.length ? covering.map((x) => x.name).join(", ") : "—";
   };
 
@@ -5893,99 +5825,105 @@ const confirmImportDealers = async () => {
             />
             <TextField label="Phone" value={draft.phone || ""} onChange={(v) => setDraft((d) => ({ ...d, phone: v }))} />
           </div>
-{/* Coverage (State → Regions) — compact, two-field UI */}
-{(() => {
-  // Pick which state we’re editing right now:
-  const st =
-    ((draft as any)._activeState as string) ||
-    (draft.states[0] as string | undefined) ||
-    (Object.keys(regions)[0] as string | undefined) ||
-    "";
+{/* Coverage (State → optional Regions) */}
+<div className="mt-4">
+  <div className="text-sm font-semibold text-slate-700 mb-1">Coverage</div>
+  <p className="text-xs text-slate-500 mb-2">
+    Add one or more states. Leave regions unchecked to cover every dealer in that state.
+  </p>
 
-  // helper for All/None buttons
-  const stateIsSelected = st && draft.states.includes(st);
+  <div className="flex flex-wrap gap-2 mb-3">
+    {(draft.states || []).length === 0 && (
+      <div className="text-xs text-slate-500">No states assigned yet.</div>
+    )}
+    {(draft.states || []).map((st) => (
+      <span key={st} className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-1 text-sm">
+        {st}
+        <button
+          type="button"
+          className="text-slate-500 hover:text-slate-800"
+          onClick={() => toggleStateForDraft(st)}
+          aria-label={`Remove ${st}`}
+        >
+          ×
+        </button>
+      </span>
+    ))}
+  </div>
 
-  return (
-    <div className="mt-4">
-      <div className="text-sm font-semibold text-slate-700 mb-2">
-        Coverage (State → Regions)
-      </div>
+  <label className="text-sm font-medium">Add a state</label>
+  <select
+    className="w-full rounded-lg border p-2 mt-1 mb-3"
+    value=""
+    onChange={(e) => {
+      const v = e.target.value;
+      if (!v) return;
+      setDraft((d) => {
+        if (d.states.includes(v)) return d;
+        return {
+          ...d,
+          states: [...d.states, v],
+          regionsByState: { ...d.regionsByState, [v]: d.regionsByState[v] || [] },
+        };
+      });
+    }}
+  >
+    <option value="">Select a state…</option>
+    {Object.keys(regions)
+      .filter((s) => !draft.states.includes(s))
+      .map((s) => (
+        <option key={s} value={s}>
+          {s}
+        </option>
+      ))}
+  </select>
 
-      <div className="grid md:grid-cols-2 gap-3">
-        {/* Left: State */}
-        <div>
-          <label className="text-sm font-medium">State</label>
-          <select
-            className="w-full rounded-lg border p-2 mt-1"
-            value={st}
-            onChange={(e) => {
-              const v = e.target.value;
-              setDraft((d) => {
-                const next: any = { ...d, _activeState: v };
-                // ensure the chosen state is tracked
-                if (v && !next.states.includes(v)) {
-                  next.states = [...next.states, v];
-                  if (!next.regionsByState[v]) next.regionsByState[v] = [];
-                }
-                return next;
-              });
-            }}
-          >
-            {Object.keys(regions).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-
-          <div className="mt-2">
+  <div className="space-y-3">
+    {(draft.states || []).map((st) => {
+      const selectedRegions = draft.regionsByState[st] || [];
+      const entireState = selectedRegions.length === 0;
+      return (
+        <div key={st} className="rounded-lg border border-slate-200 p-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="font-medium text-sm text-slate-800">{st}</div>
             <label className="inline-flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={!!st && draft.states.includes(st)}
-                onChange={() => st && toggleStateForDraft(st)}
+                checked={entireState}
+                onChange={() => {
+                  if (entireState) return;
+                  clearRegionsForState(st);
+                }}
               />
-              Assign this entire state
+              Entire state
             </label>
           </div>
-        </div>
-
-        {/* Right: Regions for selected state */}
-        <div>
-          <label className="text-sm font-medium">
-            Regions in {st || "—"}
-          </label>
-
-          <div className="mt-2 flex gap-2 text-xs">
+          <div className="flex gap-2 text-xs mb-2">
             <button
               type="button"
               className="px-2 py-1 rounded border"
-              onClick={() => st && selectAllRegionsForState(st)}
-              disabled={!stateIsSelected}
+              onClick={() => selectAllRegionsForState(st)}
             >
-              All
+              All regions
             </button>
             <button
               type="button"
               className="px-2 py-1 rounded border"
-              onClick={() => st && clearRegionsForState(st)}
-              disabled={!stateIsSelected}
+              onClick={() => clearRegionsForState(st)}
             >
-              None
+              None (entire state)
             </button>
           </div>
-
-          <div className="mt-2 flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3">
             {(regions[st] || []).length === 0 && (
-              <div className="text-xs text-slate-500">No regions for this state.</div>
+              <div className="text-xs text-slate-500">No catalog regions for this state. Entire state coverage will still include every dealer in {st}.</div>
             )}
             {(regions[st] || []).map((rg: string) => {
-              const selected = (draft.regionsByState[st] || []).includes(rg);
+              const selected = selectedRegions.includes(rg);
               return (
                 <label key={rg} className="inline-flex items-center gap-1 text-sm">
                   <input
                     type="checkbox"
-                    disabled={!stateIsSelected}
                     checked={selected}
                     onChange={() => toggleRegionForDraft(st, rg)}
                   />
@@ -5995,10 +5933,10 @@ const confirmImportDealers = async () => {
             })}
           </div>
         </div>
-      </div>
-    </div>
-  );
-})()}
+      );
+    })}
+  </div>
+</div>
 
           {/* Report Dashboard Configuration — ONLY for Reps when editing */}
           {editingId && (draft.role === "Rep" || draft.role === "Manager" || draft.role === "Admin") && (
@@ -6071,18 +6009,26 @@ const confirmImportDealers = async () => {
             </div>
           )}
 
-          {/* Invite link row — ONLY visible when editing an existing user */}
-          {editingId && (
-            <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-end">
-              <button className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50" onClick={generateInvite} type="button">
-                Generate Invite Link
+          {/* Invite email */}
+          <div className="mt-3 flex flex-col gap-2">
+            <div className="text-xs text-slate-500">
+              Send the invite by email. Do not paste the one-time link into Teams — previews can expire it before the person opens it.
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+              <button
+                className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                onClick={generateInvite}
+                type="button"
+                disabled={sendingInvite}
+              >
+                {sendingInvite ? "Sending…" : "Send invite email"}
               </button>
-              <input className="flex-1 rounded-lg border px-3 py-2 text-sm" value={inviteUrl} readOnly placeholder="Invite link will appear here…" />
+              <input className="flex-1 rounded-lg border px-3 py-2 text-sm" value={inviteUrl} readOnly placeholder="Backup link will appear here…" />
               <button className="px-3 py-2 rounded-lg border text-blue-700 border-blue-600 hover:bg-blue-50" onClick={copyInvite} disabled={!inviteUrl}>
-                Copy
+                Copy backup link
               </button>
             </div>
-          )}
+          </div>
 
           {/* Status control (only in Edit) */}
           {editingId && (
@@ -6116,8 +6062,8 @@ const confirmImportDealers = async () => {
             <button className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50" onClick={() => setUserModalOpen(false)}>
               Cancel
             </button>
-            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg`} onClick={saveUser}>
-              Save
+            <button className={`${brand.primary} text-white px-4 py-2 rounded-lg disabled:opacity-60`} onClick={saveUser} disabled={savingUser}>
+              {savingUser ? "Saving…" : "Save"}
             </button>
           </div>
         </Modal>
@@ -6220,20 +6166,18 @@ const App: React.FC = () => {
 const [showForceReset, setShowForceReset] = useState(false);
 const [newPass, setNewPass] = useState('');
 const [newPass2, setNewPass2] = useState('');
+const [resetLinkInvalid, setResetLinkInvalid] = useState(false);
 
-// Make sure we only open the modal once per page load.
 const openedResetRef = useRef(false);
 const openResetOnce = () => {
   if (openedResetRef.current) return;
   openedResetRef.current = true;
   setShowForceReset(true);
 };
-// who is resetting (derived from Supabase -> match to our app user)
 const [resetUser, setResetUser] = useState<User | null>(null);
 const [resetUsername, setResetUsername] = useState('');
 const [resetEmail, setResetEmail] = useState('');
 
-// Read auth params from BOTH the hash (#...) and the query (?...) and return tokens too
 const parseAuthParams = () => {
   const url = new URL(window.location.href);
 
@@ -6246,173 +6190,158 @@ const parseAuthParams = () => {
     hash.get('access_token') || search.get('access_token') || '';
   const refresh_token =
     hash.get('refresh_token') || search.get('refresh_token') || '';
+  const code = search.get('code') || hash.get('code') || '';
   const next = (search.get('next') || '').toLowerCase();
 
   const hasAccessToken = !!access_token;
   const shouldOpen =
-    type === 'recovery' || type === 'invite' || hasAccessToken || next === '/reset';
+    type === 'recovery' || type === 'invite' || hasAccessToken || !!code || next === '/reset';
 
-  return { shouldOpen, type, access_token, refresh_token };
+  return { shouldOpen, type, access_token, refresh_token, code };
 };
-// If the URL carries tokens, adopt that session so we're acting as the invited user
-const adoptSessionFromUrl = async () => {
-  try {
-    const { access_token, refresh_token } = parseAuthParams();
-    if (!access_token) return;
 
-    await supabase.auth.setSession({
-      access_token,
-      refresh_token: refresh_token || ''
-    });
-
-    console.debug('[auth] adopted session from URL tokens');
-  } catch (err) {
-    console.debug('[auth] setSession failed', err);
-  }
-};
-// A) Run once on page load
-useEffect(() => {
-  (async () => {
-    console.debug('[boot]', { hash: window.location.hash, search: window.location.search });
-
-    const { shouldOpen } = parseAuthParams();
-    if (shouldOpen) {
-      // 1) switch to the invited user's session (even if admin is logged in)
-      await adoptSessionFromUrl();
-
-      // 2) now open the modal
-      openResetOnce();
-
-      // 3) give Supabase a moment, then clean the URL (remove tokens & next)
-      setTimeout(() => {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
-          url.searchParams.delete('next');
-        }
-        window.history.replaceState({}, '', url.toString());
-      }, 800);
-    }
-  })();
-}, []);
-
-// B) Safety-net: listen to Supabase auth events
-useEffect(() => {
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-    if (event === 'PASSWORD_RECOVERY') {
-      console.debug('[auth] PASSWORD_RECOVERY');
-      openResetOnce();
-    } else if (event === 'SIGNED_IN') {
-      const { shouldOpen } = parseAuthParams();
-      if (shouldOpen) {
-        console.debug('[auth] SIGNED_IN + shouldOpen');
-        openResetOnce();
-      }
-    }
-  });
-  return () => subscription.unsubscribe();
-}, []);
-
-// C) Extra safety: if the URL hash changes after load
-// C) Extra safety: if the URL hash changes after load, adopt session then open modal
-useEffect(() => {
-  const onHash = async () => {
-    const { shouldOpen } = parseAuthParams();
-    if (shouldOpen) {
-      // 1) switch to the invited user's session (even if someone else is logged in)
-      await adoptSessionFromUrl();
-
-      // 2) open the reset modal
-      openResetOnce();
-
-      // 3) clean the URL after a moment (removes tokens and next=/reset)
-      setTimeout(() => {
-        const url = new URL(window.location.href);
-        url.hash = '';
-        if ((url.searchParams.get('next') || '').toLowerCase() === '/reset') {
-          url.searchParams.delete('next');
-        }
-        window.history.replaceState({}, '', url.toString());
-      }, 800);
-    }
-  };
-
-  window.addEventListener('hashchange', onHash as any, { passive: true } as any);
-  return () => window.removeEventListener('hashchange', onHash as any);
-}, []);
-// Robust helper: read authed email from the invite/recovery sign-in
 const getEmailFromAuth = async (): Promise<string> => {
   try {
-    const { data } = await supabase.auth.getUser(); // capital U
+    const { data } = await supabase.auth.getUser();
     const e = (data?.user?.email || '').toLowerCase();
     if (e) return e;
-  } catch (err) {
-    console.debug('[auth] getUser() failed', err);
+  } catch {
+    /* ignore */
   }
   try {
     const { data } = await supabase.auth.getSession();
     const e = (data?.session?.user?.email || '').toLowerCase();
     if (e) return e;
-  } catch (err) {
-    console.debug('[auth] getSession() failed', err);
+  } catch {
+    /* ignore */
   }
   return '';
 };
 
-// When the reset modal opens, read Supabase user -> map to our app user
+const cleanAuthUrl = () => {
+  const url = new URL(window.location.href);
+  url.hash = '';
+  ['next', 'code', 'type', 'access_token', 'refresh_token', 'token'].forEach((k) => url.searchParams.delete(k));
+  window.history.replaceState({}, '', url.toString());
+};
+
+const adoptSessionFromUrl = async (): Promise<boolean> => {
+  try {
+    const { access_token, refresh_token, code } = parseAuthParams();
+    if (access_token) {
+      const { error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token: refresh_token || '',
+      });
+      if (error) return false;
+    } else if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) {
+        const email = await getEmailFromAuth();
+        if (!email) return false;
+      }
+    }
+    const email = await getEmailFromAuth();
+    return !!email;
+  } catch {
+    return false;
+  }
+};
+
+useEffect(() => {
+  (async () => {
+    const { shouldOpen } = parseAuthParams();
+    if (!shouldOpen) return;
+    const ok = await adoptSessionFromUrl();
+    openResetOnce();
+    if (ok) cleanAuthUrl();
+  })();
+}, []);
+
+useEffect(() => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      openResetOnce();
+    } else if (event === 'SIGNED_IN') {
+      const { shouldOpen } = parseAuthParams();
+      if (shouldOpen) openResetOnce();
+    }
+  });
+  return () => subscription.unsubscribe();
+}, []);
+
+useEffect(() => {
+  const onHash = async () => {
+    const { shouldOpen } = parseAuthParams();
+    if (!shouldOpen) return;
+    const ok = await adoptSessionFromUrl();
+    openResetOnce();
+    if (ok) cleanAuthUrl();
+  };
+
+  window.addEventListener('hashchange', onHash as any, { passive: true } as any);
+  return () => window.removeEventListener('hashchange', onHash as any);
+}, []);
+
 useEffect(() => {
   if (!showForceReset) return;
 
   (async () => {
     try {
-      await adoptSessionFromUrl(); // NEW: ensure we are the invited user before reading getUser()
-      console.debug('[auth] tokens parsed', parseAuthParams());
-      console.debug('[after adopt] getUser()', await supabase.auth.getUser());
-      console.debug('[after adopt] getSession()', await supabase.auth.getSession());
-      
-      // 1) Read email robustly (from adopted session)
-      const emailLower = await getEmailFromAuth();
-      setResetEmail(emailLower);
-  
-      // 2) Pull the admin-picked username from user_metadata if present
+      const ok = await adoptSessionFromUrl();
       const { data: uinfo } = await supabase.auth.getUser();
+      const emailLower = ((uinfo?.user?.email || '') || await getEmailFromAuth()).toLowerCase();
       const metaUsername = String(uinfo?.user?.user_metadata?.username || '').trim();
-  
-      // 3) Fallback username = local part of email (before '@')
-      const local = emailLower.split('@')[0] || '';
-  
-      // 4) Try to match an app user from memory (optional)
-      let u =
-        (Array.isArray(users) &&
-          (users.find(x => (x?.email || '').toLowerCase() === emailLower) ||
-           users.find(x => (x?.username || '').toLowerCase() === emailLower) ||
-           users.find(x => (x?.username || '').toLowerCase() === local))) ||
-        null;
-  
-      // 5) Optional DB fallback (only if you actually have a 'users' table)
-      if (!u && emailLower) {
-        try {
-          const r = await supabase
-            .from('users') // change if your table differs, or remove if not used
-            .select('id, username, email')
-            .or(`email.eq.${emailLower},username.eq.${local}`)
-            .single();
-          if (!r.error && r.data) u = r.data as any;
-        } catch { /* ignore */ }
+
+      if (!ok || !emailLower) {
+        setResetLinkInvalid(true);
+        setResetUser(null);
+        setResetUsername('');
+        setResetEmail('');
+        return;
       }
-  
-      // 6) Prefer metadata → else matched user → else local/email
-      const chosenUsername = metaUsername || (u?.username || '') || local || emailLower;
-      console.debug('[reset-modal chosen]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
 
-      setResetUser(u);
-      setResetUsername(chosenUsername);  
+      setResetLinkInvalid(false);
+      setResetEmail(emailLower);
 
-      // Helpful debug if you need it:
-      console.debug('[reset-modal]', { emailLower, metaUsername, chosenUsername, matchedUser: u });
+      const u =
+        (Array.isArray(users) &&
+          (users.find((x) => (x?.email || '').toLowerCase() === emailLower) ||
+            users.find((x) => (x?.username || '').toLowerCase() === emailLower))) ||
+        null;
+
+      let profileUsername = '';
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('username, email, name')
+          .eq('email', emailLower)
+          .maybeSingle();
+        profileUsername = String(prof?.username || '').trim();
+        if (!u && prof) {
+          setResetUser({
+            id: uinfo?.user?.id || '',
+            name: String(prof.name || profileUsername),
+            username: profileUsername,
+            email: emailLower,
+            role: 'Rep',
+            states: [],
+            regionsByState: {},
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+
+      const chosenUsername = metaUsername || profileUsername || u?.username || emailLower.split('@')[0];
+      setResetUser((prev) => u || prev);
+      setResetUsername(chosenUsername);
+      if (ok) cleanAuthUrl();
     } catch {
+      setResetLinkInvalid(true);
       setResetUser(null);
       setResetUsername('');
+      setResetEmail('');
     }
   })();
 }, [showForceReset, users]);
@@ -6448,7 +6377,7 @@ useEffect(() => {
       //    We'll collect coverage into maps first, then turn into arrays.
       const covByUser = new Map<
         string,
-        { states: Set<string>; map: Record<string, Set<string>> }
+        { states: Set<string>; map: Record<string, Set<string>>; entire: Set<string> }
       >();
 
       for (const row of coverage || []) {
@@ -6459,15 +6388,16 @@ useEffect(() => {
         if (!u || !st) continue;
 
         if (!covByUser.has(u)) {
-          covByUser.set(u, { states: new Set<string>(), map: {} });
+          covByUser.set(u, { states: new Set<string>(), map: {}, entire: new Set<string>() });
         }
         const entry = covByUser.get(u)!;
         entry.states.add(st);
 
-        // NULL region = "all regions in that state"
+        // Empty/NULL region = entire state (do not expand to catalog regions)
         if (rg == null || rg === '') {
-          entry.map[st] = new Set<string>(regions[st] || []);
-        } else {
+          entry.entire.add(st);
+          entry.map[st] = new Set<string>();
+        } else if (!entry.entire.has(st)) {
           if (!entry.map[st]) entry.map[st] = new Set<string>();
           entry.map[st]!.add(rg);
         }
@@ -6477,9 +6407,10 @@ useEffect(() => {
       const mergedUsers: User[] = (profiles || []).map((p: any) => {
         const cv =
           covByUser.get(p.username) ||
-          ({ states: new Set<string>(), map: {} } as {
+          ({ states: new Set<string>(), map: {}, entire: new Set<string>() } as {
             states: Set<string>;
             map: Record<string, Set<string>>;
+            entire: Set<string>;
           });
 
         const statesArr = Array.from(cv.states).sort();
@@ -6874,7 +6805,10 @@ await syncLastVisitedFromNotes();
 // Save Password for Supabase invite/recovery + activate local user + log them in
 const handleSaveNewPassword = async () => {
   try {
-    // 1) Basic validation
+    if (resetLinkInvalid) {
+      showToast('This link is invalid or expired. Request a new reset email.', 'error');
+      return;
+    }
     if (!newPass || newPass.length < 8) {
       showToast('Password must be at least 8 characters.', 'error');
       return;
@@ -6884,28 +6818,20 @@ const handleSaveNewPassword = async () => {
       return;
     }
 
-    // 2) Update password in Supabase (token already signed-in from invite/recovery)
     const { error } = await supabase.auth.updateUser({ password: newPass });
     if (error) throw error;
 
-   // 3) Identify which app user this is (no extra network call needed)
-const emailLower = (resetEmail || '').toLowerCase();
-const local = emailLower.split('@')[0] || '';
-const candidates = [resetUsername.toLowerCase(), emailLower, local].filter(Boolean);
+    const emailLower = (resetEmail || '').toLowerCase();
+    const u =
+      (emailLower &&
+        Array.isArray(users) &&
+        (users.find((x: any) => (x?.email || '').toLowerCase() === emailLower) ||
+          users.find((x: any) => (x?.username || '').toLowerCase() === (resetUsername || '').toLowerCase()))) ||
+      resetUser ||
+      null;
 
-// 4) Find the user in your in-memory list by any of the candidates
-const u =
-  (Array.isArray(users) &&
-    users.find((x: any) => {
-      const uname = (x?.username || '').toLowerCase();
-      const em = (x?.email || '').toLowerCase();
-      return candidates.includes(uname) || candidates.includes(em);
-    })) ||
-  null;
-
-    // 5) If we can’t map them, still finish gracefully (they can log in manually)
     if (!u) {
-      showToast('Password set. Please log in with your username.', 'success');
+      showToast('Password set. Please log in with your email.', 'success');
       setShowForceReset(false);
       setNewPass('');
       setNewPass2('');
@@ -6913,15 +6839,11 @@ const u =
       return;
     }
 
-    // 6) Store password locally so your Login screen accepts it (username → password)
-    //    These helpers/constants already exist in your app; if TS complains, keep the casts.
     const pwMap = loadLS<PasswordMap>(LS_PASSWORDS, {});
-    pwMap[u.username] = newPass;                       // original case
-    pwMap[u.username.toLowerCase()] = newPass;         // case-insensitive login
-    saveLS(LS_PASSWORDS, pwMap);    
+    pwMap[u.username] = newPass;
+    pwMap[u.username.toLowerCase()] = newPass;
+    saveLS(LS_PASSWORDS, pwMap);
 
-    // 7) Mark the user Active in your local list and ensure email is saved
-    //    If your status field is named differently (e.g., is_active), tweak here.
     setUsers((prev: any[]) =>
       prev.map((x: any) =>
         x.id === u.id
@@ -6934,16 +6856,21 @@ const u =
       )
     );
 
-    // 8) Close modal, clear fields, create a session, and route to Home
     setShowForceReset(false);
     setNewPass('');
     setNewPass2('');
 
     setSession({ username: u.username, role: u.role });
-    setRoute('dealer-search'); // your Home screen
+    setRoute('dealer-search');
 
     showToast('Password set. You are logged in.', 'success');
   } catch (e: any) {
+    const msg = String(e?.message || '');
+    if (/session|expired|invalid/i.test(msg)) {
+      setResetLinkInvalid(true);
+      showToast('This link is invalid or expired. Request a new reset email.', 'error');
+      return;
+    }
     showToast(e?.message || 'Failed to set password', 'error');
   }
 };
@@ -6954,23 +6881,59 @@ const u =
       {showForceReset && (
   <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
     <div className="grid gap-3">
+      {resetLinkInvalid ? (
+        <>
+          <p className="text-sm text-slate-700">
+            This link is invalid or expired. Request a new reset email below. Do not paste one-time links into Teams.
+          </p>
+          <div className="rounded-lg border p-3 bg-slate-50 text-slate-700">
+            <div className="text-xs mb-2">We can email you a fresh secure reset link.</div>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-lg border hover:bg-white"
+              onClick={async () => {
+                const typed = window.prompt("Type your work email to resend the secure reset link:");
+                if (!typed) return;
+                const email = typed.trim().toLowerCase();
+                try {
+                  const resp = await fetch("/api/send-auth-email", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email }),
+                  });
+                  if (!resp.ok) {
+                    const json = await resp.json().catch(() => ({} as any));
+                    throw new Error(json?.error || "Could not send reset email.");
+                  }
+                  showToast("If that email has an account, a reset link is on the way.", "success");
+                } catch (e: any) {
+                  showToast(e?.message || "Could not send reset email.", "error");
+                }
+              }}
+            >
+              Resend secure reset email
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
       <p className="text-sm text-slate-500">
         Welcome! Please create your password to finish setting up your account.
       </p>
-{/* Read-only identity fields */}
 <TextField
   label="Username"
   value={resetUsername || '(loading…)'}
   onChange={() => {}}
   disabled
+  autoComplete="off"
 />
 <TextField
   label="Email"
   value={resetEmail || ''}
   onChange={() => {}}
   disabled
+  autoComplete="off"
 />
-{/* Trouble helper: resend a secure reset email */}
 <div className="rounded-lg border p-3 bg-slate-50 text-slate-700">
   <div className="text-xs mb-2">
     Having trouble? We can resend a secure reset link to your email.
@@ -6986,10 +6949,16 @@ const u =
         email = typed.trim().toLowerCase();
       }
       try {
-        const redirectTo = `${window.location.origin}/auth/callback?next=/reset`;
-        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-        if (error) throw error;
-        showToast("Secure reset email sent.", "success");
+        const resp = await fetch("/api/send-auth-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (!resp.ok) {
+          const json = await resp.json().catch(() => ({} as any));
+          throw new Error(json?.error || "Could not send reset email.");
+        }
+        showToast("If that email has an account, a reset link is on the way.", "success");
       } catch (e: any) {
         showToast(e?.message || "Could not send reset email.", "error");
       }
@@ -7003,6 +6972,7 @@ const u =
         type="password"
         value={newPass}
         onChange={(v) => setNewPass(v)}
+        autoComplete="new-password"
       />
 
       <TextField
@@ -7010,6 +6980,7 @@ const u =
         type="password"
         value={newPass2}
         onChange={(v) => setNewPass2(v)}
+        autoComplete="new-password"
       />
 
       <div className="flex gap-2 justify-end">
@@ -7026,6 +6997,8 @@ const u =
           Save Password
         </button>
       </div>
+        </>
+      )}
     </div>
   </Modal>
 )}
@@ -7133,13 +7106,15 @@ const TextField: React.FC<{
   placeholder?: string;
   disabled?: boolean;
   type?: string;
-}> = ({ label, value, onChange, placeholder, disabled, type }) => {
+  autoComplete?: string;
+}> = ({ label, value, onChange, placeholder, disabled, type, autoComplete }) => {
   return (
     <label className="block">
       <div className="text-xs text-slate-500 mb-1">{label}</div>
       <input
         disabled={disabled}
         type={type || "text"}
+        autoComplete={autoComplete}
         className={`w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 ${disabled ? "bg-slate-100 text-slate-400" : ""}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -7461,12 +7436,7 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
     const accessibleDealers = useMemo(() => {
       if (isAdminManager) return dealers; // Admins/Managers see all dealers, same as rest of the app
       if (!me) return [] as Dealer[];
-      const can = (d: Dealer) => {
-        const assigned = d.assignedRepUsername === me.username;
-        const coversState = !!me.states?.includes?.(d.state);
-        const coversRegion = !!me.regionsByState?.[d.state]?.includes?.(d.region);
-        return assigned || (coversState && coversRegion);
-      };
+      const can = (d: Dealer) => isAdminManager || repCoversDealer(me, d);
       return dealers.filter(can);
     }, [dealers, me, isAdminManager]);
 
