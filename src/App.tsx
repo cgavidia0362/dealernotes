@@ -125,7 +125,7 @@ async function adminAuthHeaders(): Promise<Record<string, string> | null> {
 }
 
 /* ----------------- Note type (extended for optimistic UI) ----------------- */
-type NoteCategory = "Visit" | "Problem" | "Other" | "Manager";
+type NoteCategory = "Visit" | "Called" | "Problem" | "Other" | "Manager";
 type Note = {
   id: string;                 // can be temp like "temp_..."
   dealerId: string;
@@ -2289,6 +2289,8 @@ const labelNoteLocal = (c: NoteCategory) => {
   switch (c) {
     case "Visit":
       return "Visit";
+    case "Called":
+      return "Called";
     case "Problem":
       return "Problem";
     case "Manager":
@@ -2302,6 +2304,8 @@ const noteBadgeLocal = (c: NoteCategory) => {
   switch (c) {
     case "Visit":
       return "bg-green-100 text-green-700";
+    case "Called":
+      return "bg-blue-100 text-blue-700";
     case "Problem":
       return "bg-amber-100 text-amber-700";
     case "Manager":
@@ -3159,6 +3163,7 @@ const doDeleteDealer = async () => {
               onChange={(v) => setNoteCategory(v as NoteCategory)}
               options={[
                 { label: "Visit", value: "Visit" },
+                { label: "Called", value: "Called" },
                 { label: "Problem", value: "Problem" },
                 { label: "Other", value: "Other" },
                 { label: "Manager Note", value: "Manager" },
