@@ -124,6 +124,25 @@ async function adminAuthHeaders(): Promise<Record<string, string> | null> {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
+const AUTH_USER_UUID_RE = /^[0-9a-fA-F-]{36}$/;
+const AUTH_VERIFY_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 /* ----------------- Note type (extended for optimistic UI) ----------------- */
 type NoteCategory = "Visit" | "Called" | "Problem" | "Other" | "Manager";
 type Note = {
@@ -2653,20 +2672,22 @@ const addNote = async () => {
     };
 
     const doSave = async () => {
-      // Step 1: upsert the note
-      const { error: upsertErr } = await supabase
+      const { data, error: upsertErr } = await supabase
         .from("dealer_notes")
-        .upsert(payload, { onConflict: "client_id" });
+        .upsert(payload, { onConflict: "client_id" })
+        .select("id,dealer_id,author_username,created_at,category,text")
+        .single();
       if (upsertErr) throw upsertErr;
+      if (data) return data;
 
-      // Step 2: fetch it back using client_id to get the real id
-      const { data, error: fetchErr } = await supabase
+      const { data: fetched, error: fetchErr } = await supabase
         .from("dealer_notes")
         .select("id,dealer_id,author_username,created_at,category,text")
         .eq("client_id", tempId)
-        .single();
+        .maybeSingle();
       if (fetchErr) throw fetchErr;
-      return data;
+      if (!fetched) throw new Error("Note was not found after save.");
+      return fetched;
     };
 
     const saveWithTimeout = Promise.race([
@@ -2723,27 +2744,41 @@ const addNote = async () => {
     console.log("  - Downlink speed:", (navigator as any).connection?.downlink || "Unknown", "Mbps");
     console.groupEnd();
     
-    // Check if note actually saved despite the error
-    setTimeout(async () => {
-      try {
-        const { data: verifyData } = await supabase
-          .from("dealer_notes")
-          .select("id")
-          .eq("client_id", tempId)
-          .maybeSingle();
-        
-        console.log("🔍 VERIFICATION CHECK:", verifyData ? "✅ NOTE EXISTS IN DATABASE (false positive timeout)" : "❌ NOTE DOES NOT EXIST (real failure)");
-      } catch (verifyErr) {
-        console.log("🔍 VERIFICATION CHECK: Could not verify (network issue)");
+    // If the write actually landed, treat it as success instead of alarming the user.
+    try {
+      const { data: verifyData } = await supabase
+        .from("dealer_notes")
+        .select("id,dealer_id,author_username,created_at,category,text")
+        .eq("client_id", tempId)
+        .maybeSingle();
+      if (verifyData) {
+        const saved: Note = {
+          id: String(verifyData.id),
+          dealerId: verifyData.dealer_id,
+          authorUsername: verifyData.author_username,
+          tsISO: new Date(verifyData.created_at).toISOString(),
+          category: verifyData.category as NoteCategory,
+          text: verifyData.text,
+          pending: false,
+        };
+        setLocalNotes(prev => prev.map(n => (n.id === tempId ? saved : n)));
+        showToast("Note saved successfully!", "success");
+        return;
       }
-    }, 1000);
-    // ============ END DETAILED LOGGING ============
-    
+    } catch {
+      /* fall through to the real error path */
+    }
+
+    const dbMsg = String(e?.message || e?.error_description || "");
+    const categoryBlocked = /category|check constraint|invalid input value for enum/i.test(dbMsg);
+
     setLocalNotes(prev => prev.map(n => (n.id === tempId ? { ...n, pending: false, failed: true } : n)));
 
-    const errorMsg = e.message?.includes("timeout")
-      ? "Save timed out - check your connection and retry"
-      : "Failed to save note - please retry";
+    const errorMsg = categoryBlocked
+      ? "Called notes are not allowed in the database yet. Run the category SQL in Supabase, then retry."
+      : e.message?.includes("timeout")
+        ? "Save timed out - check your connection and retry"
+        : dbMsg || "Failed to save note - please retry";
 
     showActionToast({
       kind: "error",
@@ -4636,6 +4671,9 @@ useEffect(() => {
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [adminNewPass, setAdminNewPass] = useState("");
+  const [adminNewPass2, setAdminNewPass2] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const emptyUser: User = { id: "", name: "", username: "", email: "", role: "Rep", states: [], regionsByState: {}, phone: "", reportUrl: "" };
   const [draft, setDraft] = useState<User>({ ...emptyUser });
@@ -4663,6 +4701,8 @@ const [importMode, setImportMode] = useState<'all' | 'new' | 'updates'>('all');
     setEditingId(null);
     setDraft({ ...emptyUser, id: uid() });
     setInviteToken("");
+    setAdminNewPass("");
+    setAdminNewPass2("");
     setUserModalOpen(true);
   };
 
@@ -4674,6 +4714,8 @@ const [importMode, setImportMode] = useState<'all' | 'new' | 'updates'>('all');
       email: (u as any).email ?? (u.username?.includes('@') ? u.username : ''),
     });  
     setInviteToken("");
+    setAdminNewPass("");
+    setAdminNewPass2("");
     setUserModalOpen(true);
   };
 
@@ -4782,7 +4824,7 @@ const saveUser = async () => {
     const u = users.find((x) => x.id === id);
 
     // 1) Try server-side delete if this is a real Supabase auth UUID
-    const isUUID = /^[0-9a-fA-F-]{36}$/.test(id);
+    const isUUID = AUTH_USER_UUID_RE.test(id);
     if (isUUID) {
       try {
         const r = await fetch('/api/admin-delete-user', {
@@ -4846,11 +4888,7 @@ const generateInvite = async () => {
     const json = (await r.json().catch(() => ({} as any))) as any;
     if (!r.ok) throw new Error(json?.error || 'Failed to generate link');
 
-    const link: string | undefined =
-      json?.link ??
-      json?.data?.properties?.action_link ??
-      json?.data?.action_link ??
-      undefined;
+    const link: string | undefined = json?.link || undefined;
 
     if (link) {
       setInviteToken(link);
@@ -4882,6 +4920,43 @@ const copyInvite = async () => {
     showToast('Invite link copied.', 'success');
   } catch {
     showToast('Unable to copy; select and copy manually.', 'error');
+  }
+};
+
+const saveAdminPassword = async () => {
+  if (!AUTH_USER_UUID_RE.test(draft.id)) {
+    showToast("Save the user first, then set a password.", "error");
+    return;
+  }
+  if (!adminNewPass || adminNewPass.length < 8) {
+    showToast("Password must be at least 8 characters.", "error");
+    return;
+  }
+  if (adminNewPass !== adminNewPass2) {
+    showToast("Passwords do not match.", "error");
+    return;
+  }
+  const headers = await adminAuthHeaders();
+  if (!headers) {
+    showToast("Please log in again.", "error");
+    return;
+  }
+  setSavingPassword(true);
+  try {
+    const resp = await fetch("/api/admin-set-password", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: draft.id, password: adminNewPass }),
+    });
+    const json = await resp.json().catch(() => ({} as any));
+    if (!resp.ok) throw new Error(json?.error || "Failed to set password");
+    setAdminNewPass("");
+    setAdminNewPass2("");
+    showToast("Password saved. They can log in with it now.", "success");
+  } catch (e: any) {
+    showToast(e?.message || "Failed to set password.", "error");
+  } finally {
+    setSavingPassword(false);
   }
 };
   // Activate/Deactivate: move password in/out of active store to block/allow login
@@ -6046,6 +6121,41 @@ const confirmImportDealers = async () => {
             </div>
           </div>
 
+          {AUTH_USER_UUID_RE.test(draft.id) && (
+            <div className="mt-4">
+              <div className="text-slate-800 font-semibold mb-1">Set password</div>
+              <div className="text-xs text-slate-500 mb-2">
+                Set a password directly for this person. This does not email a link.
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <TextField
+                  label="New password"
+                  type="password"
+                  value={adminNewPass}
+                  onChange={setAdminNewPass}
+                  autoComplete="new-password"
+                />
+                <TextField
+                  label="Confirm password"
+                  type="password"
+                  value={adminNewPass2}
+                  onChange={setAdminNewPass2}
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="mt-2">
+                <button
+                  className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  type="button"
+                  onClick={saveAdminPassword}
+                  disabled={savingPassword}
+                >
+                  {savingPassword ? "Saving…" : "Save password"}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Status control (only in Edit) */}
           {editingId && (
             <div className="mt-4">
@@ -6169,22 +6279,22 @@ const App: React.FC = () => {
   const [resetToken, setResetToken] = useState<string>("");
 
   useEffect(() => {
-    if (window.location.pathname === "/reset") {
-      const params = new URLSearchParams(window.location.search);
-      const t = params.get("token") || "";
-      setResetToken(t);
-      setResetOpen(true);
-    }
+    if (window.location.pathname !== "/reset") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("token_hash")) return;
+    const t = params.get("token") || "";
+    setResetToken(t);
+    setResetOpen(true);
   }, []);
-// --- Supabase invite/recovery reset detection (TOP-LEVEL) ---
-// These states are the "light switches" we flip when a Supabase link is used.
-// (It's okay if your editor warns they're unused right now. In Step 2 we'll use them.)
+// --- Supabase invite/recovery reset detection ---
 const [showForceReset, setShowForceReset] = useState(false);
 const [newPass, setNewPass] = useState('');
 const [newPass2, setNewPass2] = useState('');
 const [resetLinkInvalid, setResetLinkInvalid] = useState(false);
+const [resetChecking, setResetChecking] = useState(false);
 
 const openedResetRef = useRef(false);
+const resetHandledRef = useRef(false);
 const openResetOnce = () => {
   if (openedResetRef.current) return;
   openedResetRef.current = true;
@@ -6207,71 +6317,152 @@ const parseAuthParams = () => {
   const refresh_token =
     hash.get('refresh_token') || search.get('refresh_token') || '';
   const code = search.get('code') || hash.get('code') || '';
+  const token_hash = search.get('token_hash') || hash.get('token_hash') || '';
   const next = (search.get('next') || '').toLowerCase();
 
   const hasAccessToken = !!access_token;
   const shouldOpen =
-    type === 'recovery' || type === 'invite' || hasAccessToken || !!code || next === '/reset';
+    type === 'recovery' ||
+    type === 'invite' ||
+    type === 'signup' ||
+    hasAccessToken ||
+    !!code ||
+    !!token_hash ||
+    next === '/reset';
 
-  return { shouldOpen, type, access_token, refresh_token, code };
+  return { shouldOpen, type, access_token, refresh_token, code, token_hash };
+};
+
+const otpTypeFrom = (type: string): 'invite' | 'signup' | 'recovery' => {
+  if (type === 'invite' || type === 'signup') return type;
+  return 'recovery';
 };
 
 const getEmailFromAuth = async (): Promise<string> => {
   try {
-    const { data } = await supabase.auth.getUser();
-    const e = (data?.user?.email || '').toLowerCase();
-    if (e) return e;
-  } catch {
-    /* ignore */
-  }
-  try {
     const { data } = await supabase.auth.getSession();
-    const e = (data?.session?.user?.email || '').toLowerCase();
-    if (e) return e;
+    return (data?.session?.user?.email || '').toLowerCase();
   } catch {
-    /* ignore */
+    return '';
   }
-  return '';
 };
 
 const cleanAuthUrl = () => {
   const url = new URL(window.location.href);
   url.hash = '';
-  ['next', 'code', 'type', 'access_token', 'refresh_token', 'token'].forEach((k) => url.searchParams.delete(k));
+  ['next', 'code', 'type', 'access_token', 'refresh_token', 'token', 'token_hash'].forEach((k) => url.searchParams.delete(k));
   window.history.replaceState({}, '', url.toString());
 };
 
-const adoptSessionFromUrl = async (): Promise<boolean> => {
+const adoptSessionFromUrl = async (): Promise<string> => {
   try {
-    const { access_token, refresh_token, code } = parseAuthParams();
-    if (access_token) {
-      const { error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token: refresh_token || '',
-      });
-      if (error) return false;
+    const { token_hash, type, access_token, refresh_token, code } = parseAuthParams();
+    if (token_hash) {
+      const { data, error } = await withTimeout(
+        supabase.auth.verifyOtp({ token_hash, type: otpTypeFrom(type) }),
+        AUTH_VERIFY_MS,
+        'This link timed out. Request a new reset email.'
+      );
+      if (error) return '';
+      const fromVerify = (data?.user?.email || data?.session?.user?.email || '').toLowerCase();
+      if (fromVerify) return fromVerify;
+    } else if (access_token) {
+      const { data, error } = await withTimeout(
+        supabase.auth.setSession({
+          access_token,
+          refresh_token: refresh_token || '',
+        }),
+        AUTH_VERIFY_MS,
+        'This link timed out. Request a new reset email.'
+      );
+      if (error) return '';
+      const fromSession = (data?.user?.email || data?.session?.user?.email || '').toLowerCase();
+      if (fromSession) return fromSession;
     } else if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) {
-        const email = await getEmailFromAuth();
-        if (!email) return false;
-      }
+      const { data, error } = await withTimeout(
+        supabase.auth.exchangeCodeForSession(code),
+        AUTH_VERIFY_MS,
+        'This link timed out. Request a new reset email.'
+      );
+      if (error) return '';
+      const fromCode = (data?.user?.email || data?.session?.user?.email || '').toLowerCase();
+      if (fromCode) return fromCode;
     }
-    const email = await getEmailFromAuth();
-    return !!email;
+    return await getEmailFromAuth();
   } catch {
-    return false;
+    return '';
+  }
+};
+
+const fillResetIdentity = async (emailFromVerify: string) => {
+  const { data: sess } = await supabase.auth.getSession();
+  const authUser = sess?.session?.user;
+  const emailLower = (emailFromVerify || authUser?.email || '').toLowerCase();
+  const metaUsername = String(authUser?.user_metadata?.username || '').trim();
+
+  if (!emailLower) {
+    setResetLinkInvalid(true);
+    setResetUser(null);
+    setResetUsername('');
+    setResetEmail('');
+    return;
+  }
+
+  setResetLinkInvalid(false);
+  setResetEmail(emailLower);
+
+  let profileUsername = '';
+  try {
+    const { data: prof } = await withTimeout(
+      Promise.resolve(
+        supabase.from('profiles').select('id, username, email, name, role').eq('email', emailLower).maybeSingle()
+      ),
+      AUTH_VERIFY_MS,
+      'This link timed out. Request a new reset email.'
+    );
+    profileUsername = String(prof?.username || '').trim();
+    if (prof) {
+      setResetUser({
+        id: String(prof.id || authUser?.id || ''),
+        name: String(prof.name || profileUsername),
+        username: profileUsername,
+        email: emailLower,
+        role: (prof.role as Role) || 'Rep',
+        states: [],
+        regionsByState: {},
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const chosenUsername = metaUsername || profileUsername || emailLower.split('@')[0];
+  setResetUsername(chosenUsername);
+  cleanAuthUrl();
+};
+
+const runResetVerifyOnce = async () => {
+  if (resetHandledRef.current) return;
+  const { shouldOpen } = parseAuthParams();
+  if (!shouldOpen) return;
+  resetHandledRef.current = true;
+  openResetOnce();
+  setResetChecking(true);
+  try {
+    const email = await adoptSessionFromUrl();
+    await fillResetIdentity(email);
+  } catch {
+    setResetLinkInvalid(true);
+    setResetUser(null);
+    setResetUsername('');
+    setResetEmail('');
+  } finally {
+    setResetChecking(false);
   }
 };
 
 useEffect(() => {
-  (async () => {
-    const { shouldOpen } = parseAuthParams();
-    if (!shouldOpen) return;
-    const ok = await adoptSessionFromUrl();
-    openResetOnce();
-    if (ok) cleanAuthUrl();
-  })();
+  void runResetVerifyOnce();
 }, []);
 
 useEffect(() => {
@@ -6287,80 +6478,12 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  const onHash = async () => {
-    const { shouldOpen } = parseAuthParams();
-    if (!shouldOpen) return;
-    const ok = await adoptSessionFromUrl();
-    openResetOnce();
-    if (ok) cleanAuthUrl();
+  const onHash = () => {
+    void runResetVerifyOnce();
   };
-
   window.addEventListener('hashchange', onHash as any, { passive: true } as any);
   return () => window.removeEventListener('hashchange', onHash as any);
 }, []);
-
-useEffect(() => {
-  if (!showForceReset) return;
-
-  (async () => {
-    try {
-      const ok = await adoptSessionFromUrl();
-      const { data: uinfo } = await supabase.auth.getUser();
-      const emailLower = ((uinfo?.user?.email || '') || await getEmailFromAuth()).toLowerCase();
-      const metaUsername = String(uinfo?.user?.user_metadata?.username || '').trim();
-
-      if (!ok || !emailLower) {
-        setResetLinkInvalid(true);
-        setResetUser(null);
-        setResetUsername('');
-        setResetEmail('');
-        return;
-      }
-
-      setResetLinkInvalid(false);
-      setResetEmail(emailLower);
-
-      const u =
-        (Array.isArray(users) &&
-          (users.find((x) => (x?.email || '').toLowerCase() === emailLower) ||
-            users.find((x) => (x?.username || '').toLowerCase() === emailLower))) ||
-        null;
-
-      let profileUsername = '';
-      try {
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('username, email, name')
-          .eq('email', emailLower)
-          .maybeSingle();
-        profileUsername = String(prof?.username || '').trim();
-        if (!u && prof) {
-          setResetUser({
-            id: uinfo?.user?.id || '',
-            name: String(prof.name || profileUsername),
-            username: profileUsername,
-            email: emailLower,
-            role: 'Rep',
-            states: [],
-            regionsByState: {},
-          });
-        }
-      } catch {
-        /* ignore */
-      }
-
-      const chosenUsername = metaUsername || profileUsername || u?.username || emailLower.split('@')[0];
-      setResetUser((prev) => u || prev);
-      setResetUsername(chosenUsername);
-      if (ok) cleanAuthUrl();
-    } catch {
-      setResetLinkInvalid(true);
-      setResetUser(null);
-      setResetUsername('');
-      setResetEmail('');
-    }
-  })();
-}, [showForceReset, users]);
 
 // --- end top-level detection ---
 // === Step 5B: Load rep coverage from Supabase after login ===
@@ -6897,7 +7020,9 @@ const handleSaveNewPassword = async () => {
       {showForceReset && (
   <Modal title="Set Your Password" onClose={() => setShowForceReset(false)}>
     <div className="grid gap-3">
-      {resetLinkInvalid ? (
+      {resetChecking ? (
+        <p className="text-sm text-slate-700">Checking your link…</p>
+      ) : resetLinkInvalid ? (
         <>
           <p className="text-sm text-slate-700">
             This link is invalid or expired. Request a new reset email below. Do not paste one-time links into Teams.

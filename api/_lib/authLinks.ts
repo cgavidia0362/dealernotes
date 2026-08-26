@@ -17,16 +17,30 @@ export function authRedirectTo(): string {
   return `${siteUrl()}/auth/callback?next=/reset`;
 }
 
-export function extractActionLink(data: unknown): string | undefined {
-  if (!data || typeof data !== "object") return undefined;
+function extractHashedToken(data: unknown): { token_hash: string; type?: string } | null {
+  if (!data || typeof data !== "object") return null;
   const obj = data as Record<string, unknown>;
   const props = obj.properties && typeof obj.properties === "object" ? (obj.properties as Record<string, unknown>) : null;
   const nested = obj.email_otp && typeof obj.email_otp === "object" ? (obj.email_otp as Record<string, unknown>) : null;
-  const link =
-    (props?.action_link as string | undefined) ||
-    (obj.action_link as string | undefined) ||
-    (nested?.action_link as string | undefined);
-  return link || undefined;
+  const token_hash = String(
+    props?.hashed_token || obj.hashed_token || nested?.hashed_token || ""
+  ).trim();
+  if (!token_hash) return null;
+  const rawType = String(
+    props?.verification_type || props?.type || obj.type || nested?.type || ""
+  ).toLowerCase();
+  const type =
+    rawType === "invite" || rawType === "signup" || rawType === "recovery" ? rawType : undefined;
+  return { token_hash, type };
+}
+
+export function buildAuthVerifyUrl(token_hash: string, type: string): string {
+  const params = new URLSearchParams({
+    next: "/reset",
+    token_hash,
+    type: type || "recovery",
+  });
+  return `${siteUrl()}/auth/callback?${params.toString()}`;
 }
 
 function alreadyRegistered(message: string, status?: number): boolean {
@@ -67,12 +81,16 @@ export async function generateAuthActionLink(opts: {
       options: { redirectTo },
     });
 
+  const toAppLink = (data: unknown, mode: "invite" | "recovery"): string => {
+    const hashed = extractHashedToken(data);
+    if (hashed) return buildAuthVerifyUrl(hashed.token_hash, hashed.type || mode);
+    throw new HttpError(500, `${mode === "invite" ? "Invite" : "Reset"} link was created but the verify token was missing.`);
+  };
+
   if (opts.prefer === "invite") {
     const inviteResp = await tryInvite();
     if (!inviteResp.error) {
-      const link = extractActionLink(inviteResp.data);
-      if (!link) throw new HttpError(500, "Invite was created but the action link was missing.");
-      return { link, mode: "invite", userId: inviteResp.data.user?.id };
+      return { link: toAppLink(inviteResp.data, "invite"), mode: "invite", userId: inviteResp.data.user?.id };
     }
     if (!alreadyRegistered(inviteResp.error.message || "", inviteResp.error.status)) {
       throw new HttpError(400, inviteResp.error.message);
@@ -81,9 +99,7 @@ export async function generateAuthActionLink(opts: {
 
   const recoveryResp = await tryRecovery();
   if (recoveryResp.error) throw new HttpError(400, recoveryResp.error.message);
-  const link = extractActionLink(recoveryResp.data);
-  if (!link) throw new HttpError(500, "Reset link was created but the action link was missing.");
-  return { link, mode: "recovery", userId: recoveryResp.data.user?.id };
+  return { link: toAppLink(recoveryResp.data, "recovery"), mode: "recovery", userId: recoveryResp.data.user?.id };
 }
 
 export function buildCoverageRows(
