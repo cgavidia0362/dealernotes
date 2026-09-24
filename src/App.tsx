@@ -138,6 +138,23 @@ function compareDealersByNameMatch(a: Dealer, b: Dealer, q: string): number {
   return a.name.localeCompare(b.name);
 }
 
+function SearchClearButton({ visible, onClear }: { visible: boolean; onClear: () => void }) {
+  if (!visible) return null;
+  return (
+    <button
+      type="button"
+      aria-label="Clear search"
+      className="absolute right-0.5 top-1/2 z-10 -translate-y-1/2 inline-flex min-h-[36px] min-w-[36px] items-center justify-center text-slate-500 hover:text-slate-800"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClear}
+    >
+      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-semibold leading-none">
+        ×
+      </span>
+    </button>
+  );
+}
+
 /** Shown as this dealer’s Rep: manual assignment or a specific region only. */
 function repAssignedToDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
   if (!rep || !dealer) return false;
@@ -1769,22 +1786,24 @@ const paged = useMemo(() => {
 
       {/* Search + filters */}
       <div className="rounded-xl border bg-white p-4 shadow-sm relative">
-        <div className="hidden md:block mb-3">
+        <div className="relative hidden md:block mb-3">
           <input
-            className="w-full rounded-lg border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border px-3 py-2 pr-10 outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="Search dealers, city, state, region…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+          <SearchClearButton visible={q.length > 0} onClear={() => setQ("")} />
         </div>
 
         <div className="relative md:hidden mb-3">
           <input
-            className="w-full rounded-lg border px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border px-3 py-2.5 pr-10 outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="Search dealers, city, state, region…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+          <SearchClearButton visible={q.length > 0} onClear={() => setQ("")} />
           {q.trim().length > 0 && suggestions.length > 0 && (
             <div className="absolute left-0 right-0 mt-1 z-20 rounded-xl border bg-white shadow max-h-64 overflow-y-auto">
               {suggestions.map((d) => (
@@ -8400,7 +8419,14 @@ const exportDailySummaryCSV = () => {
         onFocus={() => setOpenSug(true)}
         onBlur={() => setTimeout(() => setOpenSug(false), 150)}
         placeholder="Search dealers (name, city, region)…"
-        className="w-full min-w-0 border rounded-lg px-3 py-2.5 md:py-2"
+        className="w-full min-w-0 border rounded-lg px-3 py-2.5 pr-10 md:py-2"
+      />
+      <SearchClearButton
+        visible={q.length > 0}
+        onClear={() => {
+          setQ("");
+          setOpenSug(false);
+        }}
       />
       {openSug && q.trim().length >= 2 && mobileSuggestions.length > 0 && (
         <div className="md:hidden absolute z-20 left-0 right-0 mt-1 max-h-64 overflow-auto bg-white border rounded-lg shadow">
