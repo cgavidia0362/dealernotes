@@ -226,7 +226,7 @@ type Task = {
   completedAtISO?: string; // ← NEW (for “Complete Task”)
 };
 
-type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset" | "master-list" | "email-automation";
+type RouteKey = "login" | "dealer-search" | "dealer-notes" | "reporting" | "user-management" | "rep-route" | "reports" | "reset" | "master-list" | "email-automation" | "ask";
 /* ------------------------------- Persistence ------------------------------ */
 const LS_USERS = "demo_users";
 const LS_DEALERS = "demo_dealers";
@@ -794,6 +794,9 @@ const TopBar: React.FC<{
           {session && (
             <nav className="ml-4 hidden md:flex items-stretch gap-0 h-14">
               <Tab label="Dealer Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+              {session?.role === "Admin" && (
+                <Tab label="Ask" active={route === "ask"} onClick={() => setRoute("ask")} />
+              )}
               <Tab label="Rep Route" active={route === "rep-route"} onClick={() => setRoute("rep-route")} />
               {session?.role === "Rep" && (
                 <Tab label="Reports" active={route === "reports"} onClick={() => setRoute("reports")} />
@@ -875,6 +878,9 @@ const TopBar: React.FC<{
           </div>
           <div className="flex flex-wrap gap-1 px-2 pb-2">
             <MobileTab label="Search" active={route === "dealer-search"} onClick={() => setRoute("dealer-search")} />
+            {session?.role === "Admin" && (
+              <MobileTab label="Ask" active={route === "ask"} onClick={() => setRoute("ask")} />
+            )}
             <MobileTab label="Route" active={route === "rep-route"} onClick={() => setRoute("rep-route")} />
             {session?.role === "Rep" && (
               <MobileTab label="Reports" active={route === "reports"} onClick={() => setRoute("reports")} />
@@ -6374,6 +6380,168 @@ const confirmImportDealers = async () => {
   );  
 }
 
+type AskConfirmPayload = {
+  action: "create_route" | "add_note";
+  date?: string;
+  dealerIds?: string[];
+  dealerId?: string;
+  category?: string;
+  text?: string;
+};
+
+type AskChatItem = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  pendingConfirm?: { action: "create_route" | "add_note"; summary: string; payload: AskConfirmPayload };
+};
+
+function localYmd(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const AskAssistantView: React.FC<{
+  session: Session;
+  showToast: (m: string, k?: "success" | "error") => void;
+}> = ({ session, showToast }) => {
+  const [items, setItems] = useState<AskChatItem[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      text: "Ask about a dealer’s last visit, build a city route, or add a note. I only use Dealer Notes — I will ask you to confirm before saving anything.",
+    },
+  ]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [items, busy]);
+
+  const send = async (opts: { message?: string; confirm?: AskConfirmPayload }) => {
+    if (busy) return;
+    const message = (opts.message || "").trim();
+    if (!opts.confirm && !message) return;
+
+    const headers = await adminAuthHeaders();
+    if (!headers) {
+      showToast("Please log in again.", "error");
+      return;
+    }
+
+    if (message) {
+      setItems((prev) => [...prev, { id: `u_${Date.now()}`, role: "user", text: message }]);
+      setDraft("");
+    }
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/ai-assistant", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          message,
+          confirm: opts.confirm || undefined,
+          routeDate: localYmd(),
+        }),
+      });
+      const json = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) throw new Error(json?.error || "The assistant could not answer.");
+      setItems((prev) => [
+        ...prev.map((item) => (opts.confirm ? { ...item, pendingConfirm: undefined } : item)),
+        {
+          id: `a_${Date.now()}`,
+          role: "assistant",
+          text: String(json?.reply || "Done."),
+          pendingConfirm: json?.pendingConfirm || undefined,
+        },
+      ]);
+    } catch (e: any) {
+      showToast(e?.message || "The assistant could not answer.", "error");
+      setItems((prev) => [
+        ...prev,
+        { id: `a_${Date.now()}`, role: "assistant", text: e?.message || "The assistant could not answer." },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 pb-24 md:pb-0">
+      <Card title="Ask" subtitle="Questions about notes, city routes, and adding a note. Confirm before anything is saved.">
+        <div className="flex flex-col gap-3">
+          <div className="rounded-xl border bg-slate-50 p-3 max-h-[60vh] overflow-y-auto space-y-3">
+            {items.map((item) => (
+              <div key={item.id} className={`flex ${item.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[92%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
+                    item.role === "user" ? "bg-blue-600 text-white" : "bg-white border text-slate-800"
+                  }`}
+                >
+                  {item.text}
+                  {item.pendingConfirm && (
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => send({ confirm: item.pendingConfirm!.payload })}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg border text-slate-700 text-sm"
+                        disabled={busy}
+                        onClick={() =>
+                          setItems((prev) =>
+                            prev.map((row) => (row.id === item.id ? { ...row, pendingConfirm: undefined } : row))
+                          )
+                        }
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {busy && <div className="text-xs text-slate-500">Checking notes…</div>}
+            <div ref={bottomRef} />
+          </div>
+          <form
+            className="flex flex-col sm:flex-row gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send({ message: draft });
+            }}
+          >
+            <textarea
+              className="flex-1 rounded-lg border px-3 py-2.5 text-sm min-h-[46px] outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g. Last conversation at Honda Libertyville"
+              value={draft}
+              rows={2}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <button
+              type="submit"
+              className={`${brand.primary} text-white px-4 py-2.5 rounded-lg disabled:opacity-60`}
+              disabled={busy || !draft.trim()}
+            >
+              Send
+            </button>
+          </form>
+          <div className="text-xs text-slate-500">Admin only for now. Ask about notes, build a city route, or add a note — Confirm before anything is saved.</div>
+        </div>
+      </Card>
+    </div>
+  );
+};
 
 /* --------------------------------- App ------------------------------------ */
 const App: React.FC = () => {
@@ -6700,6 +6868,12 @@ useEffect(() => {
     const role = session?.role;
     return { reporting: role === "Admin" || role === "Manager", userMgmt: role === "Admin" };
   }, [session]);
+
+  useEffect(() => {
+    if (route === "ask" && session?.role !== "Admin") {
+      setRoute("dealer-search");
+    }
+  }, [route, session]);
 
   useEffect(() => {
     if (route !== "email-automation") return;
@@ -7036,6 +7210,9 @@ await syncLastVisitedFromNotes();
                 showActionToast={showActionToast}
               />
             )}
+{route === "ask" && session?.role === "Admin" && (
+  <AskAssistantView session={session} showToast={showToast} />
+)}
 {route === "rep-route" && (
   <RepRouteView
     session={session}

@@ -15,3 +15,14 @@ export function getSupabaseAdmin(): SupabaseClient {
   });
   return cached;
 }
+
+export function getSupabaseUserClient(accessToken: string): SupabaseClient {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anon = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url) throw new Error("SUPABASE_URL is not configured.");
+  if (!anon) throw new Error("SUPABASE_ANON_KEY is not configured.");
+  return createClient(url, anon, {
+    auth: { autoRefreshToken: false, persistSession: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+}
