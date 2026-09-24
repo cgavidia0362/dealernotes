@@ -106,6 +106,38 @@ function repCanAccessDealer(rep: User | null | undefined, dealer: Dealer | null 
   return regionsForState.includes(dealer.region);
 }
 
+function dealerSearchTokens(q: string): string[] {
+  return String(q || "")
+    .toLowerCase()
+    .trim()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function dealerSearchHaystack(d: Dealer, extra: Array<string | undefined | null> = []): string {
+  return [d.name, d.city || "", d.state, d.region, ...extra]
+    .map((part) => String(part || "").toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function dealerMatchesQuery(d: Dealer, q: string, extra: Array<string | undefined | null> = []): boolean {
+  const tokens = dealerSearchTokens(q);
+  if (!tokens.length) return true;
+  const hay = dealerSearchHaystack(d, extra);
+  return tokens.every((token) => hay.includes(token));
+}
+
+function compareDealersByNameMatch(a: Dealer, b: Dealer, q: string): number {
+  const tokens = dealerSearchTokens(q);
+  if (tokens.length) {
+    const aName = tokens.every((token) => (a.name || "").toLowerCase().includes(token));
+    const bName = tokens.every((token) => (b.name || "").toLowerCase().includes(token));
+    if (aName !== bName) return aName ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
 /** Shown as this dealer’s Rep: manual assignment or a specific region only. */
 function repAssignedToDealer(rep: User | null | undefined, dealer: Dealer | null | undefined): boolean {
   if (!rep || !dealer) return false;
@@ -380,6 +412,67 @@ const ToastHost: React.FC<{ toasts: Toast[]; dismiss: (id: string) => void }> = 
 
 /* ------------------------------- Auth / App ------------------------------- */
 type Session = { username: string; role: Role } | null;
+
+function urlLooksLikeAuthReset(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    const search = url.searchParams;
+    const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    const hash = new URLSearchParams(rawHash || "");
+    const type = (hash.get("type") || search.get("type") || "").toLowerCase();
+    const next = (search.get("next") || "").toLowerCase();
+    return Boolean(
+      search.get("token_hash") ||
+        hash.get("token_hash") ||
+        search.get("code") ||
+        hash.get("access_token") ||
+        search.get("access_token") ||
+        type === "recovery" ||
+        type === "invite" ||
+        type === "signup" ||
+        next === "/reset" ||
+        window.location.pathname === "/reset"
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function sessionFromPersistedAuth(): Promise<Session> {
+  const { data } = await supabase.auth.getSession();
+  const user = data?.session?.user;
+  if (!user) return null;
+
+  let chosenUsername = String(user.user_metadata?.username || user.email?.split("@")[0] || "").trim();
+  let role: Role = "Rep";
+  let status: UserStatus = "Active";
+
+  try {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("username, role, status")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (prof) {
+      chosenUsername = String(prof.username || chosenUsername);
+      role = (prof.role as Role) || role;
+      status = (prof.status as UserStatus) || status;
+    }
+  } catch {
+    /* use metadata defaults */
+  }
+
+  if (status === "Inactive") {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+  if (!chosenUsername) return null;
+  return { username: chosenUsername, role };
+}
 
 const useData = () => {
   const [users, setUsers] = useState<User[]>(() => loadLS<User[]>(LS_USERS, []));
@@ -1279,11 +1372,7 @@ const copyHomeInsights = async () => {
       .filter((d) => {
         if (!repCanSeeDealer(d)) return false;
         
-        if (q) {
-          const s = q.toLowerCase();
-          const hay = [d.name, d.city || "", d.state, d.region].join(" ").toLowerCase();
-          if (!hay.includes(s)) return false;
-        }
+        if (q && !dealerMatchesQuery(d, q)) return false;
         if (fRep) {
           if (d.assignedRepUsername) {
             if (d.assignedRepUsername !== fRep) return false;
@@ -1300,7 +1389,7 @@ const copyHomeInsights = async () => {
         if (fStatus && d.status !== fStatus) return false;
         return true;
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => compareDealersByNameMatch(a, b, q));
   }, [dealers, q, fRep, fState, fRegion, fType, fStatus, users, isRep, session]);
 
   // Default (no search/filters): show only the 10 most recently visited
@@ -1330,8 +1419,8 @@ const paged = useMemo(() => {
   return filtered.slice(start, start + PAGE_SIZE);
 }, [isSearching, filtered, page, recentTop10]);
 
-  // Typeahead (mobile only): show top 6 matches under the search input
-  const suggestions = useMemo(() => filtered.slice(0, 6), [filtered]);
+  // Typeahead (mobile only): show top matches under the search input
+  const suggestions = useMemo(() => filtered.slice(0, 12), [filtered]);
 
   const regionListForState = (state: string) => (regions[state] || []).slice().sort();
 
@@ -6272,6 +6361,8 @@ const App: React.FC = () => {
   const { users, setUsers, dealers, setDealers, regions, setRegions, tasks, setTasks, notes, setNotes } = useData();
   const [route, setRoute] = useState<RouteKey>("login");
   const [session, setSession] = useState<Session>(null);
+  const sessionRef = useRef<Session>(null);
+  sessionRef.current = session;
   const { toasts, showToast, showActionToast, dismiss } = useToasts();
 
   // RESET INVITE: show modal if visiting /reset
@@ -6472,6 +6563,9 @@ useEffect(() => {
     } else if (event === 'SIGNED_IN') {
       const { shouldOpen } = parseAuthParams();
       if (shouldOpen) openResetOnce();
+    } else if (event === 'SIGNED_OUT') {
+      setSession(null);
+      setRoute((r) => (r === 'login' || r === 'reset' ? r : 'login'));
     }
   });
   return () => subscription.unsubscribe();
@@ -6607,11 +6701,38 @@ useEffect(() => {
     setSession(s);
     setRoute("dealer-search");
   };
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      /* still clear the on-screen session */
+    }
     setSession(null);
     setRoute("login");
     showToast("You have been logged off.", "success");
   };
+
+  const restorePersistedSession = async () => {
+    if (urlLooksLikeAuthReset()) return;
+    if (sessionRef.current) return;
+    const restored = await sessionFromPersistedAuth();
+    if (!restored) return;
+    setSession(restored);
+    setRoute((r) => (r === "login" || r === "reset" ? "dealer-search" : r));
+  };
+
+  useEffect(() => {
+    void restorePersistedSession();
+    const onShow = () => {
+      void restorePersistedSession();
+    };
+    window.addEventListener("pageshow", onShow);
+    document.addEventListener("visibilitychange", onShow);
+    return () => {
+      window.removeEventListener("pageshow", onShow);
+      document.removeEventListener("visibilitychange", onShow);
+    };
+  }, []);
 
   const tasksForUser = useMemo(() => {
     if (!session || session.role !== "Rep") return [];
@@ -7606,11 +7727,10 @@ const RepRouteView: React.FC<RepRouteViewProps> = (props) => {
       if (region && d.region !== region) return false;
       if (city && d.city !== city) return false;
       if (qq.length < 2) return false;
-      const hay = `${d.name} ${d.city} ${d.region}`.toLowerCase();
-      return hay.includes(qq);
-    });
+      return dealerMatchesQuery(d, qq);
+    }).sort((a, b) => compareDealersByNameMatch(a, b, qq));
   }, [accessibleDealers, q, state, region, city]);
-  const mobileSuggestions = useMemo(() => filtered.slice(0, 8), [filtered]);
+  const mobileSuggestions = useMemo(() => filtered.slice(0, 12), [filtered]);
 
   // helpers
   const saveLS = (k: string, v: any) => localStorage.setItem(k, JSON.stringify(v));
@@ -8904,16 +9024,9 @@ const DealerMasterListView: React.FC<{
       if (fState && d.state !== fState) return false;
       if (fStatus && d.status !== fStatus) return false;
       if (fType && d.type !== fType) return false;
-      if (sq) {
-        const hay = [
-          d.name, d.state, d.region, d.city || "",
-          (d as any).cifNumber || "",
-          d.assignedRepUsername || ""
-        ].join(" ").toLowerCase();
-        if (!hay.includes(sq)) return false;
-      }
+      if (sq && !dealerMatchesQuery(d, sq, [(d as any).cifNumber, d.assignedRepUsername])) return false;
       return true;
-    }).sort((a, b) => a.name.localeCompare(b.name));
+    }).sort((a, b) => compareDealersByNameMatch(a, b, sq));
   }, [dealers, q, fState, fStatus, fType]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
